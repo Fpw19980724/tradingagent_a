@@ -4,6 +4,9 @@
 .env.*.local
 !.env.example
 
+# Auto-generated config
+tradingagents/last_config.py
+
 # Python
 __pycache__/
 *.py[cod]
@@ -27,6 +30,12 @@ dist/
 venv/
 env/
 ENV/
+ta_env*/
+
+# Local data
+tradingagents/local_data/*
+tradingagents/dataflows/*
+eval_results/*
 
 # Test / tooling cache
 .pytest_cache/

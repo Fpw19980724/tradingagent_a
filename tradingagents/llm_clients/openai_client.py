@@ -1,10 +1,25 @@
 import os
 from typing import Any, Optional
 
+import httpx
 from langchain_openai import ChatOpenAI
 
 from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
+
+
+def _create_ipv4_http_client(timeout: float = 180.0) -> httpx.Client:
+    """
+    创建强制使用 IPv4 的 HTTP 客户端。
+
+    参数：
+        timeout: 请求超时时间（秒）。
+
+    返回：
+        httpx.Client: 配置完成的 HTTP 客户端。
+    """
+    transport = httpx.HTTPTransport(local_address="0.0.0.0")
+    return httpx.Client(transport=transport, timeout=timeout)
 
 
 class NormalizedChatOpenAI(ChatOpenAI):
@@ -39,7 +54,7 @@ _PROVIDER_CONFIG = {
     "xai": ("https://api.x.ai/v1", "XAI_API_KEY"),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "ollama": ("http://localhost:11434/v1", None),
-    "qwen": ("https://coding.dashscope.aliyuncs.com/v1", "QWEN_API_KEY"),
+    "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "QWEN_API_KEY"),
 }
 
 
@@ -100,6 +115,11 @@ class OpenAIClient(BaseLLMClient):
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
+
+        # 强制使用 IPv4 的 HTTP 客户端（解决 IPv6 连接超时问题）
+        if "http_client" not in llm_kwargs:
+            timeout = llm_kwargs.get("timeout", 180.0)
+            llm_kwargs["http_client"] = _create_ipv4_http_client(timeout)
 
         # 原生 OpenAI：使用 Responses API，以在不同模型家族间保持一致行为
         # 第三方兼容提供方则继续使用 Chat Completions。

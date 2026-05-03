@@ -1,10 +1,18 @@
 from typing import Optional
 import datetime
+import os
 import typer
 from pathlib import Path
 from functools import wraps
 from rich.console import Console
 from dotenv import load_dotenv
+
+# 设置环境变量以解决 IPv6 连接超时和 mini_racer 崩溃问题
+os.environ.setdefault("NO_PROXY", "*")
+os.environ.setdefault("HTTP_PROXY", "")
+os.environ.setdefault("HTTPS_PROXY", "")
+os.environ.setdefault("ALL_PROXY", "")
+os.environ.setdefault("LANGCHAIN_OPENAI_TCP_KEEPALIVE", "0")
 
 # 从 .env 文件加载环境变量
 load_dotenv()
