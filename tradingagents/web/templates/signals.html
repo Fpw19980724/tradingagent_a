@@ -738,24 +738,25 @@
                     }
 
                     tbody.innerHTML = signals.map(s => {
-                        const rowClass = s.signal.action.value === 'BUY' ? 'buy-row' :
-                                        s.signal.action.value === 'SELL' ? 'sell-row' : 'hold-row';
-                        const actionClass = s.signal.action.value === 'BUY' ? 'positive' :
-                                           s.signal.action.value === 'SELL' ? 'negative' : '';
+                        // API返回扁平结构，直接使用 s.xxx
+                        const rowClass = s.action === 'BUY' ? 'buy-row' :
+                                        s.action === 'SELL' ? 'sell-row' : 'hold-row';
+                        const actionClass = s.action === 'BUY' ? 'positive' :
+                                           s.action === 'SELL' ? 'negative' : '';
                         const statusClass = s.execution_status === 'pending' ? 'status-pending' :
                                            s.execution_status === 'executed' ? 'status-executed' : 'status-skipped';
 
                         const actionsHtml = s.execution_status === 'pending' ? `
-                            <button class="btn btn-primary btn-sm" onclick="markExecuted('${s.signal.signal_id}')">执行</button>
-                            <button class="btn btn-secondary btn-sm" onclick="markSkipped('${s.signal.signal_id}')">跳过</button>
+                            <button class="btn btn-primary btn-sm" onclick="markExecuted('${s.signal_id}')">执行</button>
+                            <button class="btn btn-secondary btn-sm" onclick="markSkipped('${s.signal_id}')">跳过</button>
                         ` : '';
 
                         return `<tr class="${rowClass}">
-                            <td>${s.signal.signal_date}</td>
-                            <td>${s.signal.symbol}</td>
-                            <td><strong class="${actionClass}">${s.signal.action.value}</strong></td>
-                            <td>${s.signal.confidence ? s.signal.confidence.toFixed(0) + '%' : '-'}</td>
-                            <td class="rationale-cell">${s.signal.rationale || '-'}</td>
+                            <td>${s.signal_date}</td>
+                            <td>${s.symbol}</td>
+                            <td><strong class="${actionClass}">${s.action}</strong></td>
+                            <td>${s.confidence ? s.confidence.toFixed(0) + '%' : '-'}</td>
+                            <td class="rationale-cell">${s.rationale || '-'}</td>
                             <td><span class="status-badge ${statusClass}">${s.execution_status}</span></td>
                             <td>${s.execution_price ? '¥' + s.execution_price.toFixed(2) : '-'}</td>
                             <td class="actions-cell">${actionsHtml}</td>
