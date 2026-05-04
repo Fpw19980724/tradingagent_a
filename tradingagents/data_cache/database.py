@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional, List, Dict
@@ -18,8 +19,10 @@ class DataCacheDB:
             db_path: 数据库文件路径。
         """
         self.db_path = Path(db_path)
-        self.conn = sqlite3.connect(str(self.db_path))
+        # check_same_thread=False 允许多线程访问（LangGraph工具执行使用多线程）
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._lock = threading.Lock()  # 线程锁保护并发写入
         self._init_tables()
 
     def _init_tables(self):
@@ -116,34 +119,35 @@ class DataCacheDB:
         返回：
             int: 新增的新闻数量。
         """
-        cursor = self.conn.cursor()
         fetch_time = datetime.now().isoformat()
         new_count = 0
 
-        for news in news_list:
-            try:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO news
-                    (symbol, title, source, publish_time, content, url, fetch_time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    symbol,
-                    news.get('title', ''),
-                    news.get('source', ''),
-                    news.get('publish_time', ''),
-                    news.get('content', ''),
-                    news.get('url', ''),
-                    fetch_time,
-                ))
-                if cursor.rowcount > 0:
-                    new_count += 1
-            except Exception:
-                continue
+        with self._lock:
+            cursor = self.conn.cursor()
+            for news in news_list:
+                try:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO news
+                        (symbol, title, source, publish_time, content, url, fetch_time)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        symbol,
+                        news.get('title', ''),
+                        news.get('source', ''),
+                        news.get('publish_time', ''),
+                        news.get('content', ''),
+                        news.get('url', ''),
+                        fetch_time,
+                    ))
+                    if cursor.rowcount > 0:
+                        new_count += 1
+                except Exception:
+                    continue
 
-        # 更新状态
-        self._update_data_status(symbol, 'news', new_count > 0)
+            # 更新状态
+            self._update_data_status(symbol, 'news', new_count > 0)
 
-        self.conn.commit()
+            self.conn.commit()
         return new_count
 
     def get_latest_news_time(self, symbol: str) -> Optional[str]:
@@ -179,31 +183,33 @@ class DataCacheDB:
 
     def save_announcements(self, symbol: str, ann_list: List[Dict]) -> int:
         """保存公告数据。"""
-        cursor = self.conn.cursor()
         fetch_time = datetime.now().isoformat()
         new_count = 0
 
-        for ann in ann_list:
-            try:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO announcements
-                    (symbol, title, type, publish_date, url, fetch_time)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    symbol,
-                    ann.get('title', ''),
-                    ann.get('type', ''),
-                    ann.get('publish_date', ''),
-                    ann.get('url', ''),
-                    fetch_time,
-                ))
-                if cursor.rowcount > 0:
-                    new_count += 1
-            except Exception:
-                continue
+        with self._lock:
+            cursor = self.conn.cursor()
+            for ann in ann_list:
+                try:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO announcements
+                        (symbol, title, type, publish_date, url, fetch_time)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        symbol,
+                        ann.get('title', ''),
+                        ann.get('type', ''),
+                        ann.get('publish_date', ''),
+                        ann.get('url', ''),
+                        fetch_time,
+                    ))
+                    if cursor.rowcount > 0:
+                        new_count += 1
+                except Exception:
+                    continue
 
-        self._update_data_status(symbol, 'announcements', new_count > 0)
-        self.conn.commit()
+            self._update_data_status(symbol, 'announcements', new_count > 0)
+            self.conn.commit()
+        return new_count
         return new_count
 
     def get_latest_announcement_date(self, symbol: str) -> Optional[str]:
@@ -244,26 +250,27 @@ class DataCacheDB:
         返回：
             bool: 是否成功保存。
         """
-        cursor = self.conn.cursor()
         fetch_time = datetime.now().isoformat()
 
-        try:
-            cursor.execute("""
-                INSERT OR REPLACE INTO financial_reports
-                (symbol, report_type, report_date, data_json, fetch_time)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                symbol,
-                report_type,
-                report_date,
-                json.dumps(data, ensure_ascii=False),
-                fetch_time,
-            ))
-            self._update_data_status(symbol, 'financials', True)
-            self.conn.commit()
-            return True
-        except Exception:
-            return False
+        with self._lock:
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO financial_reports
+                    (symbol, report_type, report_date, data_json, fetch_time)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    symbol,
+                    report_type,
+                    report_date,
+                    json.dumps(data, ensure_ascii=False),
+                    fetch_time,
+                ))
+                self._update_data_status(symbol, 'financials', True)
+                self.conn.commit()
+                return True
+            except Exception:
+                return False
 
     def get_financial_report(
         self,
@@ -306,24 +313,25 @@ class DataCacheDB:
         agents_used: Optional[List[str]] = None,
     ):
         """保存分析结果。"""
-        cursor = self.conn.cursor()
+        with self._lock:
+            cursor = self.conn.cursor()
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO analysis_history
-            (symbol, analyze_date, action, rationale, confidence,
-             full_report_path, agents_used, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            symbol,
-            analyze_date,
-            action,
-            rationale,
-            confidence,
-            report_path,
-            json.dumps(agents_used) if agents_used else None,
-            datetime.now().isoformat(),
-        ))
-        self.conn.commit()
+            cursor.execute("""
+                INSERT OR REPLACE INTO analysis_history
+                (symbol, analyze_date, action, rationale, confidence,
+                 full_report_path, agents_used, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                symbol,
+                analyze_date,
+                action,
+                rationale,
+                confidence,
+                report_path,
+                json.dumps(agents_used) if agents_used else None,
+                datetime.now().isoformat(),
+            ))
+            self.conn.commit()
 
     def get_last_analysis_date(self, symbol: str) -> Optional[str]:
         """获取上次分析日期。"""
