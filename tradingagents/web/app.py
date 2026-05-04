@@ -40,85 +40,22 @@ def get_tracker() -> ManualPortfolioTracker:
 
 
 @app.route("/")
-def dashboard():
-    """仪表盘首页。"""
-    recorder = get_recorder()
-    tracker = get_tracker()
-
-    stats = recorder.get_statistics()
-    portfolio = tracker.get_positions_summary()
-
-    return render_template(
-        "dashboard.html",
-        stats=stats,
-        portfolio=portfolio,
-    )
+def index():
+    """首页 - 重定向到信号中心。"""
+    from flask import redirect
+    return redirect("/signals")
 
 
 @app.route("/signals")
 def signals_page():
-    """信号列表页面。"""
-    date = request.args.get("date")
-    status = request.args.get("status")
-    symbol = request.args.get("symbol")
-
-    recorder = get_recorder()
-    signals = recorder.load_signals(
-        signal_date=date,
-        symbol=symbol,
-        execution_status=status,
-    )
-
-    return render_template(
-        "signals.html",
-        signals=signals,
-        filters={"date": date, "status": status, "symbol": symbol},
-    )
-
-
-@app.route("/portfolio")
-def portfolio_page():
-    """组合状态页面。"""
-    tracker = get_tracker()
-    summary = tracker.get_positions_summary()
-    equity_curve = tracker.get_equity_curve()
-
-    return render_template(
-        "portfolio.html",
-        portfolio=summary,
-        equity_curve=equity_curve,
-    )
+    """信号中心页面。"""
+    return render_template("signals.html")
 
 
 @app.route("/backtest")
 def backtest_page():
-    """回测页面。"""
-    recorder = get_recorder()
-    stats = recorder.get_statistics()
-
-    # 检查是否有历史报告
-    reports_dir = Path("backtest_results")
-    saved_reports = []
-    if reports_dir.exists():
-        for f in reports_dir.glob("*.json"):
-            try:
-                with open(f, "r", encoding="utf-8") as fp:
-                    data = json.load(fp)
-                    saved_reports.append({
-                        "filename": f.name,
-                        "start_date": data.get("start_date"),
-                        "end_date": data.get("end_date"),
-                        "total_return": data.get("total_return"),
-                        "sharpe_ratio": data.get("sharpe_ratio"),
-                    })
-            except Exception:
-                pass
-
-    return render_template(
-        "backtest.html",
-        stats=stats,
-        saved_reports=saved_reports,
-    )
+    """回测分析页面。"""
+    return render_template("backtest.html")
 
 
 # ==================== API路由 ====================
@@ -239,6 +176,89 @@ def api_generate_signals_stream():
 
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream")
+
+
+@app.route("/api/signals/batch-generate-stream", methods=["POST"])
+def api_batch_generate_signals_stream():
+    """批量生成信号API（SSE流式版本，生成区间内每一天的信号）。"""
+    data = request.get_json()
+
+    watchlist_path = data.get("watchlist_path", "watchlist.csv")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+
+    if not start_date or not end_date:
+        return jsonify({"error": "需要起始和结束日期"}), 400
+
+    def generate():
+        try:
+            from datetime import timedelta
+
+            watchlist = load_watchlist(watchlist_path)
+            generator = SignalGenerator()
+            recorder = SignalRecorder()
+
+            # 计算交易日数量
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+            # 计算总交易日和总任务数
+            trading_days = []
+            current = start_dt
+            while current <= end_dt:
+                if current.weekday() < 5:  # 周一到周五
+                    trading_days.append(current.strftime("%Y-%m-%d"))
+                current += timedelta(days=1)
+
+            total_days = len(trading_days)
+            total_symbols = len(watchlist)
+            total_tasks = total_days * total_symbols
+
+            # 发送开始事件
+            yield f"event: start\ndata: {json.dumps({'start_date': start_date, 'end_date': end_date, 'total_days': total_days, 'total_symbols': total_symbols, 'total_tasks': total_tasks})}\n\n"
+
+            completed_tasks = 0
+            cancelled = False
+
+            for day_idx, trade_date in enumerate(trading_days, 1):
+                if cancelled:
+                    break
+
+                # 发送日期进度
+                yield f"event: day\ndata: {json.dumps({'day_current': day_idx, 'day_total': total_days, 'date': trade_date})}\n\n"
+
+                for symbol_idx, symbol in enumerate(watchlist, 1):
+                    if cancelled:
+                        break
+
+                    completed_tasks += 1
+                    task_idx = (day_idx - 1) * total_symbols + symbol_idx
+
+                    # 发送任务进度
+                    yield f"event: progress\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol, 'status': 'analyzing'})}\n\n"
+
+                    try:
+                        signal = generator.generate_for_symbol(symbol, trade_date)
+                        recorder.save_signal(signal)
+
+                        # 发送完成事件
+                        yield f"event: completed\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol, 'action': signal.action.value, 'confidence': signal.confidence})}\n\n"
+
+                    except Exception as e:
+                        # 发送错误事件
+                        yield f"event: error\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol, 'error': str(e)})}\n\n"
+
+            # 发送完成事件
+            yield f"event: done\ndata: {json.dumps({'start_date': start_date, 'end_date': end_date, 'total_days': total_days, 'total_signals': completed_tasks})}\n\n"
+
+        except GeneratorExit:
+            # 客户端断开连接，停止执行
+            print("客户端取消，停止生成")
+            return
+        except Exception as e:
+            yield f"event: fatal_error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
     return Response(generate(), mimetype="text/event-stream")
 
