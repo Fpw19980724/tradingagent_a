@@ -4,23 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>回测 - TradingAgents</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
         .header { background: #2c3e50; color: white; padding: 15px 20px; margin-bottom: 20px; }
         .header h1 { font-size: 24px; }
         .nav { display: flex; gap: 20px; }
         .nav a { color: white; text-decoration: none; padding: 5px 10px; border-radius: 4px; }
         .nav a:hover { background: rgba(255,255,255,0.1); }
         .nav a.active { background: rgba(255,255,255,0.2); }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .grid { display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
         .card { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .card h2 { font-size: 18px; color: #2c3e50; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
         .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; color: #666; }
+        .form-group label { display: block; margin-bottom: 5px; color: #666; font-size: 13px; }
         .form-group input, .form-group select { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
-        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .btn { padding: 10px 20px; background: #3498db; color: white; border-radius: 4px; cursor: pointer; border: none; font-size: 14px; }
         .btn:hover { background: #2980b9; }
         .btn:disabled { background: #bdc3c7; cursor: not-allowed; }
@@ -29,15 +29,16 @@
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; }
         th { background: #f8f9fa; font-weight: bold; }
-        .report-card { background: #f8f9fa; padding: 15px; border-radius: 4px; margin-top: 10px; }
-        .report-card h3 { color: #2c3e50; margin-bottom: 10px; }
-        .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-        .stat-item { text-align: center; padding: 10px; background: white; border-radius: 4px; }
-        .stat-item .value { font-size: 20px; font-weight: bold; margin-top: 5px; }
-        .stat-item .label { color: #666; font-size: 12px; }
+        .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; }
+        .metric-box { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }
+        .metric-box .value { font-size: 24px; font-weight: bold; margin-top: 5px; }
+        .metric-box .label { color: #666; font-size: 12px; }
+        .chart-container { height: 300px; margin: 20px 0; }
+        .trades-table { max-height: 400px; overflow-y: auto; }
         .loading { text-align: center; padding: 20px; color: #666; }
-        .error-msg { color: #e74c3c; padding: 10px; background: #fdeaea; border-radius: 4px; margin-top: 10px; }
-        .success-msg { color: #27ae60; padding: 10px; background: #e8f5e9; border-radius: 4px; margin-top: 10px; }
+        .error-msg { color: #e74c3c; padding: 10px; background: #fdeaea; border-radius: 4px; }
+        .success-msg { color: #27ae60; padding: 10px; background: #e8f5e9; border-radius: 4px; }
+        .full-width { grid-column: 1 / -1; }
     </style>
 </head>
 <body>
@@ -53,84 +54,126 @@
 
     <div class="container">
         <div class="grid">
+            <!-- 左侧配置面板 -->
             <div class="card">
                 <h2>回测配置</h2>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>起始日期</label>
-                        <input type="date" id="start_date" value="">
-                    </div>
-                    <div class="form-group">
-                        <label>结束日期</label>
-                        <input type="date" id="end_date" value="">
-                    </div>
+                <div class="form-group">
+                    <label>起始日期</label>
+                    <input type="date" id="start_date">
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>初始资金 (¥)</label>
-                        <input type="number" id="capital" value="100000">
-                    </div>
-                    <div class="form-group">
-                        <label>最大持仓数</label>
-                        <input type="number" id="max_positions" value="5">
-                    </div>
+                <div class="form-group">
+                    <label>结束日期</label>
+                    <input type="date" id="end_date">
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>单只仓位上限 (%)</label>
-                        <input type="number" id="max_position_pct" value="20">
-                    </div>
-                    <div class="form-group">
-                        <label>佣金率 (%)</label>
-                        <input type="number" id="commission_rate" value="0.03" step="0.01">
-                    </div>
+                <div class="form-group">
+                    <label>初始资金 (¥)</label>
+                    <input type="number" id="capital" value="100000">
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>印花税率 (%)</label>
-                        <input type="number" id="stamp_duty_rate" value="0.05" step="0.01">
-                    </div>
+                <div class="form-group">
+                    <label>最大持仓数</label>
+                    <input type="number" id="max_positions" value="5">
                 </div>
-                <div style="margin-top: 15px;">
-                    <button class="btn" id="runBtn" onclick="runBacktest()">执行回测</button>
+                <div class="form-group">
+                    <label>单只仓位上限 (%)</label>
+                    <input type="number" id="max_position_pct" value="20">
                 </div>
-                <div id="statusMsg"></div>
-            </div>
+                <div class="form-group">
+                    <label>佣金率 (%)</label>
+                    <input type="number" id="commission_rate" value="0.03" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>印花税率 (%)</label>
+                    <input type="number" id="stamp_duty_rate" value="0.05" step="0.01">
+                </div>
+                <button class="btn" id="runBtn" onclick="runBacktest()" style="width: 100%;">执行回测</button>
+                <div id="statusMsg" style="margin-top: 10px;"></div>
 
-            <div class="card">
-                <h2>历史回测报告</h2>
+                <h2 style="margin-top: 20px;">历史报告</h2>
                 <table>
-                    <thead>
-                        <tr>
-                            <th>报告文件</th>
-                            <th>区间</th>
-                            <th>总收益</th>
-                            <th>夏普</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
+                    <thead><tr><th>区间</th><th>收益</th><th>操作</th></tr></thead>
                     <tbody id="reportsList">
                         {% for report in saved_reports %}
                         <tr>
-                            <td>{{ report.filename }}</td>
-                            <td>{{ report.start_date }} ~ {{ report.end_date }}</td>
-                            <td class="{% if report.total_return >= 0 %}positive{% else %}negative{% endif %}">
-                                {{ "%.2f"|format(report.total_return) }}%
-                            </td>
-                            <td>{{ "%.2f"|format(report.sharpe_ratio) }}</td>
-                            <td>
-                                <button class="btn" onclick="loadReport('{{ report.filename }}')">查看</button>
-                            </td>
+                            <td style="font-size: 12px;">{{ report.start_date }}~{{ report.end_date }}</td>
+                            <td class="{% if report.total_return >= 0 %}positive{% else %}negative{% endif %}">{{ "%.1f"|format(report.total_return) }}%</td>
+                            <td><button class="btn" style="padding: 5px 10px;" onclick="loadReport('{{ report.filename }}')">查看</button></td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-        </div>
 
-        <div class="card" id="reportCard" style="margin-top: 20px; display: none;">
-            <h2>回测结果</h2>
-            <div class="report-card" id="reportContent"></div>
+            <!-- 右侧结果展示 -->
+            <div id="resultsPanel" style="display: none;">
+                <div class="card full-width">
+                    <h2>回测结果 - <span id="reportRange"></span></h2>
+
+                    <!-- 指标概览 -->
+                    <div class="metrics-grid">
+                        <div class="metric-box">
+                            <div class="label">总收益率</div>
+                            <div class="value" id="totalReturn">-</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="label">年化收益</div>
+                            <div class="value" id="annualReturn">-</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="label">夏普比率</div>
+                            <div class="value" id="sharpeRatio">-</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="label">最大回撤</div>
+                            <div class="value negative" id="maxDrawdown">-</div>
+                        </div>
+                    </div>
+
+                    <div class="metrics-grid">
+                        <div class="metric-box">
+                            <div class="label">交易次数</div>
+                            <div class="value" id="totalTrades">-</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="label">胜率</div>
+                            <div class="value" id="winRate">-</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="label">盈亏比</div>
+                            <div class="value" id="profitFactor">-</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="label">平均持仓</div>
+                            <div class="value" id="avgHolding">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 权益曲线图表 -->
+                <div class="card full-width">
+                    <h2>权益曲线</h2>
+                    <div class="chart-container">
+                        <canvas id="equityChart"></canvas>
+                    </div>
+                    <div style="display: flex; gap: 20px; margin-top: 15px; color: #666; font-size: 13px;">
+                        <span>初始资金: ¥<span id="initCapital">-</span></span>
+                        <span>最终资产: ¥<span id="finalEquity">-</span></span>
+                        <span>总成本: ¥<span id="totalCosts">-</span></span>
+                    </div>
+                </div>
+
+                <!-- 交易明细 -->
+                <div class="card full-width">
+                    <h2>交易明细</h2>
+                    <div class="trades-table">
+                        <table>
+                            <thead>
+                                <tr><th>决策日</th><th>股票</th><th>动作</th><th>入场价</th><th>出场价</th><th>收益%</th><th>盈亏(¥)</th></tr>
+                            </thead>
+                            <tbody id="tradesList"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -139,18 +182,17 @@
         const today = new Date();
         const oneMonthAgo = new Date(today);
         oneMonthAgo.setMonth(today.getMonth() - 1);
-
         document.getElementById('start_date').value = oneMonthAgo.toISOString().split('T')[0];
         document.getElementById('end_date').value = today.toISOString().split('T')[0];
+
+        let equityChart = null;
 
         function runBacktest() {
             const btn = document.getElementById('runBtn');
             const statusDiv = document.getElementById('statusMsg');
-            const reportCard = document.getElementById('reportCard');
 
             btn.disabled = true;
-            statusDiv.innerHTML = '<div class="loading">正在执行回测，请稍候...</div>';
-            reportCard.style.display = 'none';
+            statusDiv.innerHTML = '<div class="loading">执行中...</div>';
 
             const data = {
                 start_date: document.getElementById('start_date').value,
@@ -171,90 +213,108 @@
             .then(result => {
                 btn.disabled = false;
                 if (result.success) {
-                    statusDiv.innerHTML = '<div class="success-msg">回测完成！报告已保存</div>';
+                    statusDiv.innerHTML = '<div class="success-msg">完成!</div>';
                     displayReport(result.report);
                     loadReportsList();
                 } else {
-                    statusDiv.innerHTML = '<div class="error-msg">错误: ' + result.error + '</div>';
+                    statusDiv.innerHTML = '<div class="error-msg">' + result.error + '</div>';
                 }
             })
             .catch(e => {
                 btn.disabled = false;
-                statusDiv.innerHTML = '<div class="error-msg">请求失败: ' + e + '</div>';
+                statusDiv.innerHTML = '<div class="error-msg">' + e + '</div>';
             });
         }
 
         function displayReport(report) {
-            const reportCard = document.getElementById('reportCard');
-            const content = document.getElementById('reportContent');
+            document.getElementById('resultsPanel').style.display = 'block';
+            document.getElementById('reportRange').textContent = report.start_date + ' ~ ' + report.end_date;
 
+            // 指标
             const sign = report.total_return >= 0 ? '+' : '';
-            const sharpeClass = report.sharpe_ratio >= 1 ? 'positive' : (report.sharpe_ratio < 0 ? 'negative' : '');
+            document.getElementById('totalReturn').textContent = sign + report.total_return.toFixed(2) + '%';
+            document.getElementById('totalReturn').className = 'value ' + (report.total_return >= 0 ? 'positive' : 'negative');
 
-            content.innerHTML = `
-                <div class="stat-grid">
-                    <div class="stat-item">
-                        <div class="label">总收益率</div>
-                        <div class="value ${report.total_return >= 0 ? 'positive' : 'negative'}">${sign}${report.total_return.toFixed(2)}%</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="label">年化收益</div>
-                        <div class="value ${report.annualized_return >= 0 ? 'positive' : 'negative'}">${report.annualized_return.toFixed(2)}%</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="label">夏普比率</div>
-                        <div class="value ${sharpeClass}">${report.sharpe_ratio.toFixed(2)}</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="label">最大回撤</div>
-                        <div class="value negative">${report.max_drawdown.toFixed(2)}%</div>
-                    </div>
-                </div>
-                <div class="stat-grid" style="margin-top: 15px;">
-                    <div class="stat-item">
-                        <div class="label">总交易次数</div>
-                        <div class="value">${report.total_trades}</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="label">胜率</div>
-                        <div class="value ${report.win_rate >= 50 ? 'positive' : 'negative'}">${report.win_rate.toFixed(1)}%</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="label">盈亏比</div>
-                        <div class="value">${report.profit_factor.toFixed(2)}</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="label">平均持仓</div>
-                        <div class="value">${report.avg_holding_days.toFixed(1)}天</div>
-                    </div>
-                </div>
-                <div style="margin-top: 15px; padding: 10px; background: white; border-radius: 4px;">
-                    <strong>交易成本:</strong>
-                    佣金 ¥${report.total_commission.toFixed(2)} |
-                    印花税 ¥${report.total_stamp_duty.toFixed(2)} |
-                    过户费 ¥${report.total_transfer_fee.toFixed(2)} |
-                    合计 ¥${report.total_costs.toFixed(2)}
-                </div>
-                <div style="margin-top: 15px;">
-                    <strong>权益曲线:</strong>
-                    <div style="height: 150px; overflow-y: auto; margin-top: 10px; padding: 10px; background: white; border-radius: 4px;">
-                        ${report.equity_curve.map(p => `<span style="margin-right: 20px;">${p.date}: ¥${p.equity.toFixed(2)}</span>`).join('')}
-                    </div>
-                </div>
-            `;
+            document.getElementById('annualReturn').textContent = report.annualized_return.toFixed(2) + '%';
+            document.getElementById('annualReturn').className = 'value ' + (report.annualized_return >= 0 ? 'positive' : 'negative');
 
-            reportCard.style.display = 'block';
+            document.getElementById('sharpeRatio').textContent = report.sharpe_ratio.toFixed(2);
+            document.getElementById('sharpeRatio').className = 'value ' + (report.sharpe_ratio >= 1 ? 'positive' : '');
+
+            document.getElementById('maxDrawdown').textContent = report.max_drawdown.toFixed(2) + '%';
+            document.getElementById('totalTrades').textContent = report.total_trades;
+            document.getElementById('winRate').textContent = report.win_rate.toFixed(1) + '%';
+            document.getElementById('winRate').className = 'value ' + (report.win_rate >= 50 ? 'positive' : 'negative');
+            document.getElementById('profitFactor').textContent = report.profit_factor.toFixed(2);
+            document.getElementById('avgHolding').textContent = report.avg_holding_days.toFixed(1) + '天';
+
+            document.getElementById('initCapital').textContent = report.initial_capital.toFixed(2);
+            document.getElementById('finalEquity').textContent = report.final_equity.toFixed(2);
+            document.getElementById('totalCosts').textContent = report.total_costs.toFixed(2);
+
+            // 权益曲线图表
+            const ctx = document.getElementById('equityChart').getContext('2d');
+
+            if (equityChart) {
+                equityChart.destroy();
+            }
+
+            equityChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: report.equity_curve.map(p => p.date),
+                    datasets: [{
+                        label: '权益',
+                        data: report.equity_curve.map(p => p.equity),
+                        borderColor: '#3498db',
+                        backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                        fill: true,
+                        tension: 0.1,
+                        pointRadius: 2,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                    },
+                    scales: {
+                        x: {
+                            grid: { display: false },
+                            ticks: { maxTicksLimit: 10 }
+                        },
+                        y: {
+                            beginAtZero: false,
+                            ticks: {
+                                callback: v => '¥' + v.toLocaleString()
+                            }
+                        }
+                    }
+                }
+            });
+
+            // 交易明细
+            const tradesHtml = report.trades.filter(t => t.executed).map(t => {
+                const pnlSign = t.return_pct >= 0 ? '+' : '';
+                return `<tr>
+                    <td>${t.trade_date}</td>
+                    <td>${t.symbol}</td>
+                    <td>${t.action}</td>
+                    <td>¥${t.entry_price.toFixed(2)}</td>
+                    <td>¥${t.exit_price.toFixed(2)}</td>
+                    <td class="${t.return_pct >= 0 ? 'positive' : 'negative'}">${pnlSign}${t.return_pct.toFixed(2)}%</td>
+                    <td class="${t.pnl >= 0 ? 'positive' : 'negative'}">${pnlSign}¥${t.pnl.toFixed(2)}</td>
+                </tr>`;
+            }).join('');
+            document.getElementById('tradesList').innerHTML = tradesHtml || '<tr><td colspan="7">无交易记录</td></tr>';
         }
 
         function loadReport(filename) {
             fetch('/api/backtest/report/' + filename)
             .then(r => r.json())
-            .then(report => {
-                displayReport(report);
-            })
-            .catch(e => {
-                alert('加载失败: ' + e);
-            });
+            .then(displayReport)
+            .catch(e => alert('加载失败: ' + e));
         }
 
         function loadReportsList() {
@@ -264,17 +324,14 @@
                 const tbody = document.getElementById('reportsList');
                 tbody.innerHTML = reports.map(r => `
                     <tr>
-                        <td>${r.filename}</td>
-                        <td>${r.start_date} ~ ${r.end_date}</td>
-                        <td class="${r.total_return >= 0 ? 'positive' : 'negative'}">${r.total_return.toFixed(2)}%</td>
-                        <td>${r.sharpe_ratio.toFixed(2)}</td>
-                        <td><button class="btn" onclick="loadReport('${r.filename}')">查看</button></td>
+                        <td style="font-size:12px;">${r.start_date}~${r.end_date}</td>
+                        <td class="${r.total_return >= 0 ? 'positive' : 'negative'}">${r.total_return.toFixed(1)}%</td>
+                        <td><button class="btn" style="padding:5px 10px;" onclick="loadReport('${r.filename}')">查看</button></td>
                     </tr>
                 `).join('');
             });
         }
 
-        // 初始化加载报告列表
         loadReportsList();
     </script>
 </body>
