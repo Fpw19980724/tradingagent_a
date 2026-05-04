@@ -36,6 +36,8 @@ ta_env*/
 tradingagents/local_data/*
 tradingagents/dataflows/*
 eval_results/*
+reports/
+*.db
 
 # Test / tooling cache
 .pytest_cache/

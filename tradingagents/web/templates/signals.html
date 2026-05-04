@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>信号列表 - TradingAgents</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: #2c3e50; color: white; padding: 15px 20px; margin-bottom: 20px; }
+        .header h1 { font-size: 24px; }
+        .nav { display: flex; gap: 20px; }
+        .nav a { color: white; text-decoration: none; padding: 5px 10px; border-radius: 4px; }
+        .nav a:hover { background: rgba(255,255,255,0.1); }
+        .card { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card h2 { font-size: 18px; color: #2c3e50; margin-bottom: 15px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; font-weight: bold; }
+        .positive { color: #27ae60; }
+        .negative { color: #e74c3c; }
+        .buy { background: #d4edda; }
+        .sell { background: #f8d7da; }
+        .hold { background: #fff3cd; }
+        .filter-bar { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+        .filter-bar input, .filter-bar select { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
+        .btn { padding: 8px 16px; background: #3498db; color: white; border-radius: 4px; cursor: pointer; text-decoration: none; border: none; }
+        .btn:hover { background: #2980b9; }
+        .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+        .pending { background: #ffeeba; color: #856404; }
+        .executed { background: #d4edda; color: #155724; }
+        .skipped { background: #e2e3e5; color: #383d41; }
+        .expired { background: #f8d7da; color: #721c24; }
+        .rationale { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .actions-cell { display: flex; gap: 5px; }
+        .actions-cell button { padding: 4px 8px; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>TradingAgents - 信号列表</h1>
+        <nav class="nav">
+            <a href="/">仪表盘</a>
+            <a href="/signals" class="active">信号列表</a>
+            <a href="/portfolio">组合管理</a>
+            <a href="/backtest">回测</a>
+        </nav>
+    </div>
+
+    <div class="container">
+        <div class="filter-bar">
+            <label>日期:</label>
+            <input type="date" id="filterDate" value="{{ filters.date or '' }}">
+            <label>股票:</label>
+            <input type="text" id="filterSymbol" value="{{ filters.symbol or '' }}" placeholder="股票代码">
+            <label>状态:</label>
+            <select id="filterStatus">
+                <option value="">全部</option>
+                <option value="pending" {% if filters.status == 'pending' %}selected{% endif %}>待执行</option>
+                <option value="executed" {% if filters.status == 'executed' %}selected{% endif %}>已执行</option>
+                <option value="skipped" {% if filters.status == 'skipped' %}selected{% endif %}>已跳过</option>
+            </select>
+            <button class="btn" onclick="applyFilters()">筛选</button>
+            <button class="btn" onclick="clearFilters()">清除</button>
+        </div>
+
+        <div class="card">
+            <h2>信号列表 ({{ signals|length }} 条)</h2>
+            {% if signals|length == 0 %}
+            <p>暂无信号记录。点击"生成今日信号"开始。</p>
+            {% else %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>日期</th>
+                        <th>代码</th>
+                        <th>动作</th>
+                        <th>置信度</th>
+                        <th>建议数量</th>
+                        <th>理由</th>
+                        <th>状态</th>
+                        <th>执行价</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for record in signals %}
+                    <tr class="{{ record.signal.action.value|lower }}">
+                        <td>{{ record.signal.signal_date }}</td>
+                        <td>{{ record.signal.symbol }}</td>
+                        <td>
+                            <strong class="{% if record.signal.action.value == 'BUY' %}positive{% elif record.signal.action.value == 'SELL' %}negative{% endif %}">
+                                {{ record.signal.action.value }}
+                            </strong>
+                        </td>
+                        <td>{{ record.signal.confidence or '-' }}</td>
+                        <td>{{ record.signal.suggested_quantity or '-' }}</td>
+                        <td class="rationale" title="{{ record.signal.rationale }}">
+                            {{ record.signal.rationale[:50] }}{% if record.signal.rationale|length > 50 %}...{% endif %}
+                        </td>
+                        <td>
+                            <span class="status-badge {{ record.execution_status }}">
+                                {{ record.execution_status }}
+                            </span>
+                        </td>
+                        <td>{{ record.execution_price or '-' }}</td>
+                        <td class="actions-cell">
+                            {% if record.execution_status == 'pending' %}
+                            <button onclick="markExecuted('{{ record.signal.signal_id[:8] }}')">执行</button>
+                            <button onclick="markSkipped('{{ record.signal.signal_id[:8] }}')">跳过</button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        function applyFilters() {
+            const date = document.getElementById('filterDate').value;
+            const symbol = document.getElementById('filterSymbol').value;
+            const status = document.getElementById('filterStatus').value;
+            let url = '/signals?';
+            if (date) url += 'date=' + date + '&';
+            if (symbol) url += 'symbol=' + symbol + '&';
+            if (status) url += 'status=' + status;
+            location.href = url;
+        }
+
+        function clearFilters() {
+            location.href = '/signals';
+        }
+
+        function markExecuted(signalId) {
+            const price = prompt('执行价格:');
+            const quantity = prompt('执行数量:');
+            if (price) {
+                fetch('/api/signals/' + signalId, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        status: 'executed',
+                        price: parseFloat(price),
+                        quantity: parseInt(quantity) || null,
+                        date: new Date().toISOString().split('T')[0]
+                    })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) location.reload();
+                    else alert('更新失败: ' + data.error);
+                });
+            }
+        }
+
+        function markSkipped(signalId) {
+            const reason = prompt('跳过原因:');
+            fetch('/api/signals/' + signalId, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({status: 'skipped', notes: reason || ''})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) location.reload();
+                else alert('更新失败: ' + data.error);
+            });
+        }
+    </script>
+</body>
+</html>

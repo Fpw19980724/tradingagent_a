@@ -15,19 +15,19 @@ pip install -e .
 # Run CLI (interactive analysis)
 tradingagents
 # or
-python -m cli.main
+python3 -m cli.main
 
 # Run tests
-python -m unittest discover tests
+python3 -m unittest discover tests
 
 # Run a single test file
-python -m unittest tests.test_a_share_dataflows
+python3 -m unittest tests.test_a_share_dataflows
 
 # Quick test script (dataflows validation)
-python test.py
+python3 test.py
 
 # Run main.py (platform example)
-python main.py
+python3 main.py
 ```
 
 ## Environment Setup

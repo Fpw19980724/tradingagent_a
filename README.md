@@ -136,7 +136,7 @@ export OPENROUTER_API_KEY=...
 ```bash
 tradingagents
 # 或
-python -m cli.main
+python3 -m cli.main
 ```
 
 ## Python 调用示例
@@ -167,8 +167,8 @@ print(decision)
 ## 开发与测试
 
 ```bash
-python -m unittest discover tests
-python main.py
+python3 -m unittest discover tests
+python3 main.py
 ```
 
 ## 开源合规说明

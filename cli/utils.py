@@ -391,12 +391,12 @@ def ask_openai_reasoning_effort() -> str:
     ).ask()
 
 
-def ask_anthropic_effort() -> str | None:
+def ask_anthropic_effort() -> Optional[str]:
     """
     选择 Anthropic 的推理强度。
-    
+
     返回：
-        str | None: 当前交互选择结果。
+        Optional[str]: 当前交互选择结果。
     """
     return questionary.select(
         "Select Effort Level:",
@@ -413,12 +413,12 @@ def ask_anthropic_effort() -> str | None:
     ).ask()
 
 
-def ask_gemini_thinking_config() -> str | None:
+def ask_gemini_thinking_config() -> Optional[str]:
     """
     选择 Gemini 的思考模式配置。
-    
+
     返回：
-        str | None: 当前交互选择结果。
+        Optional[str]: 当前交互选择结果。
     """
     return questionary.select(
         "Select Thinking Mode:",

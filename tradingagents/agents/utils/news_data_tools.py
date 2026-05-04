@@ -2,6 +2,7 @@ from langchain_core.tools import tool
 from typing import Annotated
 from tradingagents.data_tools.api import run_data_tool
 
+
 @tool
 def get_news(
     ticker: Annotated[str, "Ticker symbol"],
@@ -10,6 +11,7 @@ def get_news(
 ) -> str:
     """
     获取指定股票代码对应的 A 股公司新闻数据。
+    会先检查数据库缓存，如果已有最新新闻则直接返回缓存数据。
     参数：
         ticker (str): A 股股票代码。
         start_date (str): 开始日期，格式为 YYYY-MM-DD。
@@ -17,12 +19,12 @@ def get_news(
     返回：
         str: 格式化后的新闻数据字符串。
     """
-    return run_data_tool(
-        "get_news",
-        ticker=ticker,
-        start_date=start_date,
-        end_date=end_date,
-    )
+    from tradingagents.data_cache import get_fetcher
+
+    fetcher = get_fetcher()
+    news_str, has_new = fetcher.fetch_news_with_cache(ticker, start_date, end_date)
+    return news_str
+
 
 @tool
 def get_market_news(
@@ -32,10 +34,11 @@ def get_market_news(
 ) -> str:
     """
     获取 A 股市场、政策与宏观新闻。
+    注意：市场新闻不针对特定股票，不使用股票级缓存。
     参数：
         curr_date (str): 当前日期，格式为 YYYY-MM-DD。
         look_back_days (int): 回看天数，默认 7 天。
-        limit (int): 最多返回的文章数量，默认 5 条。
+        limit (int): 最多返回的文章数量，默认 10 条。
     返回：
         str: 格式化后的 A 股市场新闻字符串。
     """
@@ -46,6 +49,7 @@ def get_market_news(
         limit=limit,
     )
 
+
 @tool
 def get_company_announcements(
     ticker: Annotated[str, "ticker symbol"],
@@ -55,6 +59,7 @@ def get_company_announcements(
 ) -> str:
     """
     获取指定股票在给定日期区间内的 A 股公司公告。
+    会先检查数据库缓存，如果已有最新公告则直接返回缓存数据。
     参数：
         ticker (str): 公司股票代码。
         start_date (str): 开始日期，格式为 YYYY-MM-DD。
@@ -63,10 +68,10 @@ def get_company_announcements(
     返回：
         str: 公司公告报告文本。
     """
-    return run_data_tool(
-        "get_company_announcements",
-        ticker=ticker,
-        start_date=start_date,
-        end_date=end_date,
-        category=category,
+    from tradingagents.data_cache import get_fetcher
+
+    fetcher = get_fetcher()
+    ann_str, has_new = fetcher.fetch_announcements_with_cache(
+        ticker, start_date, end_date, category
     )
+    return ann_str
