@@ -81,6 +81,14 @@
         /* 阻塞提示 */
         .blocked-msg { background: #fff3cd; color: #856404; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
         .blocked-msg a { color: #856404; font-weight: bold; }
+
+        /* 全局进度条（跨页面显示） */
+        .global-progress { background: #fff3cd; border-bottom: 1px solid #ffc107; padding: 10px 20px; display: none; }
+        .global-progress.active { display: block; }
+        .global-progress-bar-bg { background: #e0e0e0; border-radius: 4px; height: 20px; overflow: hidden; max-width: 600px; }
+        .global-progress-bar { height: 100%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: bold; }
+        .global-progress-text { font-size: 13px; color: #856404; margin-left: 15px; }
+        .global-progress-cancel { margin-left: 15px; }
     </style>
 </head>
 <body>
@@ -91,6 +99,17 @@
                 <a href="/signals">信号中心</a>
                 <a href="/backtest" class="active">回测分析</a>
             </nav>
+        </div>
+    </div>
+
+    <!-- 全局进度条（跨页面显示） -->
+    <div class="global-progress" id="globalProgress">
+        <div style="max-width: 1400px; margin: 0 auto; display: flex; align-items: center;">
+            <div class="global-progress-bar-bg">
+                <div class="global-progress-bar" id="globalProgressBar" style="width: 0%; background: #f39c12;"></div>
+            </div>
+            <div class="global-progress-text" id="globalProgressText">准备中...</div>
+            <a href="/signals" class="btn btn-sm btn-warning" style="background: #f39c12; color: white;">返回信号中心取消</a>
         </div>
     </div>
 
@@ -249,6 +268,96 @@
     </div>
 
     <script>
+        // ========== 全局进度条状态同步 ==========
+
+        // 获取进度状态
+        function getProgressState() {
+            const data = localStorage.getItem('batchGenProgress');
+            return data ? JSON.parse(data) : null;
+        }
+
+        // 获取详细进度数据
+        function getDetailProgress() {
+            const data = localStorage.getItem('batchGenDetailProgress');
+            return data ? JSON.parse(data) : null;
+        }
+
+        // 更新全局进度条显示
+        function updateGlobalProgress(pct, text, isActive) {
+            const progressDiv = document.getElementById('globalProgress');
+            const progressBar = document.getElementById('globalProgressBar');
+            const progressText = document.getElementById('globalProgressText');
+
+            if (isActive) {
+                progressDiv.classList.add('active');
+                progressBar.style.width = pct + '%';
+                progressBar.textContent = Math.round(pct) + '%';
+                progressText.textContent = text;
+            } else {
+                progressDiv.classList.remove('active');
+            }
+        }
+
+        // 格式化Token数量
+        function formatTokens(n) {
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+            return n;
+        }
+
+        // 页面加载时检查
+        function checkProgressOnLoad() {
+            const state = getProgressState();
+            const detail = getDetailProgress();
+            if (state && state.active) {
+                updateGlobalProgress(state.pct, state.text, true);
+                // 显示详细进度信息
+                if (detail && state.pct < 100) {
+                    let detailText = '';
+                    if (detail.stats) {
+                        detailText = `LLM: ${detail.stats.llm_calls || 0} | Tools: ${detail.stats.tool_calls || 0} | Tokens: ${formatTokens(detail.stats.tokens_in || 0)}↑ ${formatTokens(detail.stats.tokens_out || 0)}↓`;
+                    }
+                    if (detail.current_symbol) {
+                        detailText += ` | 分析: ${detail.current_symbol}`;
+                    }
+                    if (detailText) {
+                        document.getElementById('globalProgressText').textContent = text + ' - ' + detailText;
+                    }
+                }
+            }
+        }
+
+        // 定期检查 localStorage 状态
+        function startProgressSync() {
+            setInterval(() => {
+                const state = getProgressState();
+                const detail = getDetailProgress();
+                if (state && state.active) {
+                    updateGlobalProgress(state.pct, state.text, true);
+                    // 更新详细进度
+                    if (detail && state.pct < 100) {
+                        let detailText = '';
+                        if (detail.stats) {
+                            detailText = `LLM: ${detail.stats.llm_calls || 0} | Tools: ${detail.stats.tool_calls || 0}`;
+                        }
+                        if (detail.current_symbol) {
+                            detailText += ` | 分析: ${detail.current_symbol}`;
+                        }
+                        if (detailText) {
+                            document.getElementById('globalProgressText').textContent = state.text + ' - ' + detailText;
+                        }
+                    }
+                } else {
+                    updateGlobalProgress(0, '', false);
+                }
+            }, 1000);
+        }
+
+        // 初始化
+        checkProgressOnLoad();
+        startProgressSync();
+
+        // ========== 回测功能 ==========
+
         // 设置默认日期
         const today = new Date();
         const oneMonthAgo = new Date(today);

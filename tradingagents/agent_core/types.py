@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, Optional
 
 
 class DecisionAction(str, Enum):
@@ -20,11 +20,11 @@ class AgentDecision:
     trade_date: str
     action: DecisionAction
     rationale: str = ""
-    confidence: float | None = None
+    confidence: Optional[float] = None
     quantity: float = 1.0
-    decision_time: str | None = None
+    decision_time: Optional[str] = None
     holding_period_bars: int = 1
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class AgentRunRequest:
 
     symbol: str
     trade_date: str
-    context: dict[str, Any] = field(default_factory=dict)
+    context: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -41,14 +41,14 @@ class AgentRunResult:
     """描述一次 Agent 运行结果。"""
 
     agent_name: str
-    decision: AgentDecision | None
-    outputs: dict[str, Any] = field(default_factory=dict)
+    decision: Optional[AgentDecision]
+    outputs: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class AgentExecutionContext:
     """描述 Agent 运行时可访问的共享能力。"""
 
-    config: dict[str, Any]
+    config: Dict[str, Any]
     data_tools: Any
     market_tools: Any

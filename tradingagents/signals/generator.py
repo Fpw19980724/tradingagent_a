@@ -43,7 +43,11 @@ class SignalGenerator:
             "output_language": "Chinese",
         }
 
-    def _get_platform(self, selected_analysts: Optional[List[str]] = None) -> TradingPlatform:
+    def _get_platform(
+        self,
+        selected_analysts: Optional[List[str]] = None,
+        callbacks: Optional[List] = None,
+    ) -> TradingPlatform:
         """获取或创建平台实例，注册指定分析师的Agent。"""
         analysts = selected_analysts or self.default_analysts
 
@@ -51,6 +55,7 @@ class SignalGenerator:
         platform.register_trading_agents_agent(
             selected_analysts=analysts,
             debug=False,
+            callbacks=callbacks,
         )
         return platform
 
@@ -60,6 +65,7 @@ class SignalGenerator:
         trade_date: str,
         selected_analysts: Optional[List[str]] = None,
         pre_fetch_data: bool = False,
+        callbacks: Optional[List] = None,
     ) -> TradingSignal:
         """
         为单个股票生成交易信号。
@@ -69,6 +75,7 @@ class SignalGenerator:
             trade_date: 交易日期 YYYY-MM-DD。
             selected_analysts: 本次运行的分析师列表（可选）。
             pre_fetch_data: 是否预获取并缓存数据。
+            callbacks: LangChain回调处理器列表（可选）。
 
         返回：
             TradingSignal: 生成的交易信号。
@@ -81,8 +88,8 @@ class SignalGenerator:
         if pre_fetch_data:
             self._pre_fetch_data(symbol, trade_date, analysts)
 
-        # 获取平台实例（使用指定的分析师）
-        platform = self._get_platform(analysts)
+        # 获取平台实例（使用指定的分析师和回调）
+        platform = self._get_platform(analysts, callbacks=callbacks)
 
         request = AgentRunRequest(symbol=symbol, trade_date=trade_date)
 

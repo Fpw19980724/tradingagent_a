@@ -19,6 +19,7 @@ class TradingAgentsAgent(BaseAgent):
         selected_analysts: list[str] | None = None,
         debug: bool = False,
         config: dict[str, Any] | None = None,
+        callbacks: list[Any] | None = None,
     ):
         """
         初始化 TradingAgents 适配器。
@@ -28,6 +29,7 @@ class TradingAgentsAgent(BaseAgent):
             selected_analysts: 启用的分析师列表。
             debug: 是否启用旧图调试模式。
             config: 运行时配置。
+            callbacks: LangChain回调处理器列表。
 
         返回：
             None: 无返回值。
@@ -36,6 +38,7 @@ class TradingAgentsAgent(BaseAgent):
         self.selected_analysts = selected_analysts or ["market", "social", "news", "fundamentals"]
         self.debug = debug
         self.config = config
+        self.callbacks = callbacks or []
         self._graph = None
 
     def run(self, request: AgentRunRequest, context: AgentExecutionContext) -> AgentRunResult:
@@ -97,6 +100,7 @@ class TradingAgentsAgent(BaseAgent):
                 selected_analysts=self.selected_analysts,
                 debug=self.debug,
                 config=runtime_config,
+                callbacks=self.callbacks,
             )
         return self._graph
 

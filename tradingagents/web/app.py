@@ -1,8 +1,11 @@
 """Web Dashboard - Flask应用。"""
 
 import json
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from queue import Queue, Empty
 
 import pandas as pd
 from flask import Flask, jsonify, render_template, request, Response
@@ -34,6 +37,71 @@ def get_tracker() -> ManualPortfolioTracker:
     if _tracker is None:
         _tracker = ManualPortfolioTracker()
     return _tracker
+
+
+def save_report_to_disk(final_state: dict, ticker: str, save_path: Path) -> Path:
+    """
+    将完整分析报告按目录结构保存到磁盘（与CLI一致）。
+
+    参数：
+        final_state: 工作流执行完成后的最终状态。
+        ticker: 股票代码。
+        save_path: 保存目录路径。
+
+    返回：
+        Path: 完整报告文件路径。
+    """
+    save_path.mkdir(parents=True, exist_ok=True)
+    sections = []
+
+    # 1. 分析师团队报告
+    analysts_dir = save_path / "1_analysts"
+    analyst_parts = []
+    if final_state.get("final_market_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "market_report.md").write_text(final_state["final_market_report"], encoding="utf-8")
+        analyst_parts.append(("Market Analyst", final_state["final_market_report"]))
+    if final_state.get("final_sentiment_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "sentiment_report.md").write_text(final_state["final_sentiment_report"], encoding="utf-8")
+        analyst_parts.append(("Social Analyst", final_state["final_sentiment_report"]))
+    if final_state.get("final_news_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "news_report.md").write_text(final_state["final_news_report"], encoding="utf-8")
+        analyst_parts.append(("News Analyst", final_state["final_news_report"]))
+    if final_state.get("final_fundamentals_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "fundamentals_report.md").write_text(final_state["final_fundamentals_report"], encoding="utf-8")
+        analyst_parts.append(("Fundamentals Analyst", final_state["final_fundamentals_report"]))
+    if analyst_parts:
+        content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
+        sections.append(f"## I. Analyst Team Reports\n\n{content}")
+
+    # 2. 研究团队决策
+    if final_state.get("final_investment_plan_report"):
+        research_dir = save_path / "2_research"
+        research_dir.mkdir(exist_ok=True)
+        (research_dir / "investment_plan.md").write_text(final_state["final_investment_plan_report"], encoding="utf-8")
+        sections.append(f"## II. Research Team Decision\n\n{final_state['final_investment_plan_report']}")
+
+    # 3. 交易团队计划
+    if final_state.get("final_trader_investment_plan_report"):
+        trading_dir = save_path / "3_trading"
+        trading_dir.mkdir(exist_ok=True)
+        (trading_dir / "trader_investment_plan_report.md").write_text(final_state["final_trader_investment_plan_report"], encoding="utf-8")
+        sections.append(f"## III. Trading Team Plan\n\n{final_state['final_trader_investment_plan_report']}")
+
+    # 4. 组合管理决策
+    if final_state.get("final_trade_decision_report"):
+        portfolio_dir = save_path / "4_portfolio"
+        portfolio_dir.mkdir(exist_ok=True)
+        (portfolio_dir / "final_trade_decision_report.md").write_text(final_state["final_trade_decision_report"], encoding="utf-8")
+        sections.append(f"## IV. Portfolio Management Decision\n\n{final_state['final_trade_decision_report']}")
+
+    # 保存完整报告
+    header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
+    return save_path / "complete_report.md"
 
 
 # ==================== 页面路由 ====================
@@ -104,90 +172,252 @@ def api_signal_detail(signal_id):
         return jsonify({"success": True})
 
 
-@app.route("/api/signals/generate", methods=["POST"])
-def api_generate_signals():
-    """生成信号API（普通版本，返回最终结果）。"""
-    data = request.get_json()
-
-    watchlist_path = data.get("watchlist_path", "watchlist.csv")
-    trade_date = data.get("date")
-
-    if not trade_date:
-        from datetime import datetime
-        trade_date = datetime.now().strftime("%Y-%m-%d")
-
-    try:
-        watchlist = load_watchlist(watchlist_path)
-        generator = SignalGenerator()
-        signals = generator.generate_and_save(watchlist, trade_date)
-
-        return jsonify({
-            "success": True,
-            "date": trade_date,
-            "count": len(signals),
-            "signals": [{"id": s.signal_id, "symbol": s.symbol, "action": s.action.value} for s in signals],
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/api/signals/generate-stream", methods=["POST"])
 def api_generate_signals_stream():
-    """生成信号API（SSE流式版本，实时返回进度）。"""
+    """生成单日信号API（SSE流式版本，实时返回进度和Agent状态）。"""
     data = request.get_json()
 
     watchlist_path = data.get("watchlist_path", "watchlist.csv")
     trade_date = data.get("date")
+    model_config = data.get("model_config", {})
+    selected_analysts = model_config.get("selected_analysts", ["market", "news", "fundamentals"])
+
+    # 映射 research_depth 到 max_debate_rounds
+    if "research_depth" in model_config:
+        model_config["max_debate_rounds"] = model_config["research_depth"]
+        model_config["max_risk_discuss_rounds"] = model_config["research_depth"]
 
     if not trade_date:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     def generate():
         try:
-            # 发送开始事件
-            yield f"event: start\ndata: {json.dumps({'date': trade_date, 'total': 0})}\n\n"
+            from tradingagents.web.progress_tracker import WebProgressTracker
+            from tradingagents.graph.trading_graph import TradingAgentsGraph
+            from tradingagents.default_config import DEFAULT_CONFIG
+            from tradingagents.signals import SignalRecorder
+            from tradingagents.signals.types import TradingSignal
+            from tradingagents.agent_core.types import DecisionAction
 
             watchlist = load_watchlist(watchlist_path)
-            total = len(watchlist)
+            tracker = WebProgressTracker(None, selected_analysts=selected_analysts)
 
-            # 发送总数事件
-            yield f"event: total\ndata: {json.dumps({'total': total})}\n\n"
+            # 合并配置
+            config = DEFAULT_CONFIG.copy()
+            config.update(model_config)
 
-            generator = SignalGenerator()
+            # 全局开始时间
+            global_start_time = time.time()
+            tracker.start_time = global_start_time
+
+            total_symbols = len(watchlist)
+
+            # 发送开始事件
+            yield f"event: start\ndata: {json.dumps({'date': trade_date, 'total': total_symbols, 'selected_analysts': selected_analysts})}\n\n"
+
+            # 发送初始agent状态
+            yield f"event: agent_status\ndata: {json.dumps(tracker.get_full_status())}\n\n"
+
             recorder = SignalRecorder()
 
+            # Agent状态更新函数
+            ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
+            ANALYST_AGENT_NAMES = {
+                "market": "Market Analyst",
+                "social": "Social Analyst",
+                "news": "News Analyst",
+                "fundamentals": "Fundamentals Analyst",
+            }
+            ANALYST_REPORT_MAP = {
+                "market": "market_report",
+                "social": "sentiment_report",
+                "news": "news_report",
+                "fundamentals": "fundamentals_report",
+            }
+
+            def update_analyst_statuses_from_chunk(chunk, tracker, selected):
+                found_active = False
+                for analyst_key in ANALYST_ORDER:
+                    if analyst_key not in selected:
+                        continue
+                    agent_name = ANALYST_AGENT_NAMES[analyst_key]
+                    report_key = ANALYST_REPORT_MAP[analyst_key]
+                    if chunk.get(report_key):
+                        tracker.mark_agent_completed(agent_name)
+                    elif not found_active:
+                        tracker.set_current_agent(agent_name)
+                        found_active = True
+
+                if not found_active and selected:
+                    all_done = all(
+                        tracker.agent_status.get(ANALYST_AGENT_NAMES[key]) == "completed"
+                        for key in selected if key in ANALYST_AGENT_NAMES
+                    )
+                    if all_done and tracker.agent_status.get("Bull Researcher") == "pending":
+                        tracker.set_current_agent("Bull Researcher")
+
+            def update_research_team_status(tracker, status):
+                for agent in ["Bull Researcher", "Bear Researcher", "Research Manager"]:
+                    tracker.agent_status[agent] = status
+                tracker._push_event_direct("agent_start", {
+                    "agent": "Research Team",
+                    "status": status,
+                    "agent_status": tracker.agent_status,
+                })
+
             for idx, symbol in enumerate(watchlist, 1):
-                # 发送进度事件
-                yield f"event: progress\ndata: {json.dumps({'current': idx, 'total': total, 'symbol': symbol, 'status': 'analyzing'})}\n\n"
+                # 发送任务开始
+                yield f"event: task_start\ndata: {json.dumps({'current': idx, 'total': total_symbols, 'symbol': symbol})}\n\n"
+
+                # 重置统计，保持全局耗时
+                tracker.llm_calls = 0
+                tracker.tool_calls = 0
+                tracker.tokens_in = 0
+                tracker.tokens_out = 0
+                tracker._init_agent_status()
+                tracker.recent_events.clear()
+                tracker.current_agent = None
+                tracker.start_time = global_start_time
+
+                yield f"event: agent_status\ndata: {json.dumps(tracker.get_full_status())}\n\n"
 
                 try:
-                    signal = generator.generate_for_symbol(symbol, trade_date)
+                    graph = TradingAgentsGraph(
+                        selected_analysts=selected_analysts,
+                        config=config,
+                        debug=True,
+                        callbacks=[tracker],
+                    )
+
+                    init_state = graph.propagator.create_initial_state(symbol, trade_date)
+                    args = graph.propagator.get_graph_args(callbacks=[tracker])
+
+                    trace = []
+                    for chunk in graph.graph.stream(init_state, **args):
+                        update_analyst_statuses_from_chunk(chunk, tracker, selected_analysts)
+
+                        # ===== 提取工具调用并发送事件（类似CLI） =====
+                        if "messages" in chunk and len(chunk["messages"]) > 0:
+                            last_message = chunk["messages"][-1]
+                            if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                                for tool_call in last_message.tool_calls:
+                                    if isinstance(tool_call, dict):
+                                        tool_name = tool_call.get("name", "unknown")
+                                        tool_args = tool_call.get("args", {})
+                                    else:
+                                        tool_name = getattr(tool_call, "name", "unknown")
+                                        tool_args = getattr(tool_call, "args", {})
+
+                                    # 格式化参数
+                                    args_str = str(tool_args)
+                                    if len(args_str) > 100:
+                                        args_str = args_str[:97] + "..."
+
+                                    # 更新tracker计数
+                                    tracker.tool_calls += 1
+
+                                    # 发送tool_start事件
+                                    tool_event = {
+                                        'tool_name': tool_name,
+                                        'args': args_str,
+                                        'call_count': tracker.tool_calls,
+                                        'timestamp': time.strftime('%H:%M:%S'),
+                                        'agent': tracker.current_agent or 'Unknown',
+                                    }
+                                    yield f"event: tool_start\ndata: {json.dumps(tool_event)}\n\n"
+                        # ===== 工具调用提取结束 =====
+
+                        if chunk.get("investment_debate_state"):
+                            debate = chunk["investment_debate_state"]
+                            if debate.get("bull_history") or debate.get("bear_history"):
+                                update_research_team_status(tracker, "in_progress")
+                            if debate.get("judge_decision"):
+                                update_research_team_status(tracker, "completed")
+                                tracker.set_current_agent("Trader")
+
+                        if chunk.get("trader_investment_plan"):
+                            tracker.mark_agent_completed("Trader")
+                            tracker.set_current_agent("Aggressive Analyst")
+
+                        if chunk.get("risk_debate_state"):
+                            risk = chunk["risk_debate_state"]
+                            if risk.get("aggressive_history"):
+                                tracker.set_current_agent("Aggressive Analyst")
+                            if risk.get("conservative_history"):
+                                tracker.set_current_agent("Conservative Analyst")
+                            if risk.get("neutral_history"):
+                                tracker.set_current_agent("Neutral Analyst")
+                            if risk.get("judge_decision"):
+                                for agent in ["Aggressive Analyst", "Conservative Analyst", "Neutral Analyst"]:
+                                    tracker.mark_agent_completed(agent)
+                                tracker.set_current_agent("Portfolio Manager")
+
+                        if chunk.get("final_trade_decision_report"):
+                            tracker.mark_agent_completed("Portfolio Manager")
+                            tracker.mark_agent_completed("Report Finalizer")
+
+                        yield f"event: agent_status\ndata: {json.dumps(tracker.get_full_status())}\n\n"
+                        elapsed = int(time.time() - global_start_time)
+                        yield f"event: heartbeat\ndata: {json.dumps({'symbol': symbol, 'elapsed': elapsed})}\n\n"
+
+                        trace.append(chunk)
+
+                    final_state = trace[-1]
+
+                    # 保存中间状态到eval_results（与CLI一致）
+                    graph.ticker = symbol
+                    graph._log_state(trade_date, final_state)
+
+                    # 保存Markdown报告到reports目录（与CLI一致）
+                    report_dir = Path("reports") / symbol / trade_date
+                    save_report_to_disk(final_state, symbol, report_dir)
+
+                    raw_signal = graph.process_signal(final_state["final_trade_decision"])
+
+                    signal_map = {"BUY": "BUY", "OVERWEIGHT": "BUY", "SELL": "SELL", "UNDERWEIGHT": "SELL", "HOLD": "HOLD"}
+                    action_str = signal_map.get((raw_signal or "").upper(), "HOLD")
+                    action = DecisionAction(action_str)
+
+                    signal = TradingSignal.create(
+                        symbol=symbol,
+                        signal_date=trade_date,
+                        action=action,
+                        rationale=final_state.get("final_trade_decision_report", ""),
+                        metadata={"analysts_used": selected_analysts},
+                    )
                     recorder.save_signal(signal)
 
-                    # 发送完成事件
-                    yield f"event: completed\ndata: {json.dumps({'current': idx, 'total': total, 'symbol': symbol, 'action': signal.action.value, 'confidence': signal.confidence})}\n\n"
+                    yield f"event: task_complete\ndata: {json.dumps({'current': idx, 'total': total_symbols, 'symbol': symbol, 'action': action.value, 'confidence': signal.confidence, 'stats': tracker._get_stats()})}\n\n"
 
                 except Exception as e:
-                    # 发送错误事件
-                    yield f"event: error\ndata: {json.dumps({'current': idx, 'total': total, 'symbol': symbol, 'error': str(e)})}\n\n"
+                    yield f"event: task_error\ndata: {json.dumps({'current': idx, 'total': total_symbols, 'symbol': symbol, 'error': str(e)})}\n\n"
 
-            # 发送完成事件
-            yield f"event: done\ndata: {json.dumps({'date': trade_date, 'count': total})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'date': trade_date, 'count': total_symbols})}\n\n"
 
+        except GeneratorExit:
+            print("客户端取消，停止生成")
+            return
         except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            yield f"event: fatal_error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
     return Response(generate(), mimetype="text/event-stream")
 
 
 @app.route("/api/signals/batch-generate-stream", methods=["POST"])
 def api_batch_generate_signals_stream():
-    """批量生成信号API（SSE流式版本，生成区间内每一天的信号）。"""
+    """批量生成信号API（SSE流式版本，生成区间内每一天的信号，含详细进度和Agent状态追踪）。"""
     data = request.get_json()
 
     watchlist_path = data.get("watchlist_path", "watchlist.csv")
     start_date = data.get("start_date")
     end_date = data.get("end_date")
+    model_config = data.get("model_config", {})
+    selected_analysts = model_config.get("selected_analysts", ["market", "news", "fundamentals"])
+
+    # 映射 research_depth 到 max_debate_rounds
+    if "research_depth" in model_config:
+        model_config["max_debate_rounds"] = model_config["research_depth"]
+        model_config["max_risk_discuss_rounds"] = model_config["research_depth"]
 
     if not start_date or not end_date:
         return jsonify({"error": "需要起始和结束日期"}), 400
@@ -195,10 +425,23 @@ def api_batch_generate_signals_stream():
     def generate():
         try:
             from datetime import timedelta
+            from tradingagents.web.progress_tracker import WebProgressTracker
+            from tradingagents.graph.trading_graph import TradingAgentsGraph
+            from tradingagents.default_config import DEFAULT_CONFIG
+            from tradingagents.signals import SignalRecorder
+            from tradingagents.signals.types import TradingSignal
+            from tradingagents.agent_core.types import DecisionAction
 
             watchlist = load_watchlist(watchlist_path)
-            generator = SignalGenerator()
-            recorder = SignalRecorder()
+            tracker = WebProgressTracker(None, selected_analysts=selected_analysts)
+
+            # 合并配置
+            config = DEFAULT_CONFIG.copy()
+            config.update(model_config)
+
+            # 全局开始时间（不重置）
+            global_start_time = time.time()
+            tracker.start_time = global_start_time
 
             # 计算交易日数量
             start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -217,44 +460,219 @@ def api_batch_generate_signals_stream():
             total_tasks = total_days * total_symbols
 
             # 发送开始事件
-            yield f"event: start\ndata: {json.dumps({'start_date': start_date, 'end_date': end_date, 'total_days': total_days, 'total_symbols': total_symbols, 'total_tasks': total_tasks})}\n\n"
+            yield f"event: start\ndata: {json.dumps({'start_date': start_date, 'end_date': end_date, 'total_days': total_days, 'total_symbols': total_symbols, 'total_tasks': total_tasks, 'selected_analysts': selected_analysts})}\n\n"
+
+            # 发送初始agent状态
+            yield f"event: agent_status\ndata: {json.dumps(tracker.get_full_status())}\n\n"
 
             completed_tasks = 0
-            cancelled = False
+            recorder = SignalRecorder()
+
+            # Agent状态更新函数（类似CLI）
+            ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
+            ANALYST_AGENT_NAMES = {
+                "market": "Market Analyst",
+                "social": "Social Analyst",
+                "news": "News Analyst",
+                "fundamentals": "Fundamentals Analyst",
+            }
+            ANALYST_REPORT_MAP = {
+                "market": "market_report",
+                "social": "sentiment_report",
+                "news": "news_report",
+                "fundamentals": "fundamentals_report",
+            }
+
+            def update_analyst_statuses_from_chunk(chunk, tracker, selected):
+                """根据chunk更新分析师状态。"""
+                found_active = False
+                for analyst_key in ANALYST_ORDER:
+                    if analyst_key not in selected:
+                        continue
+
+                    agent_name = ANALYST_AGENT_NAMES[analyst_key]
+                    report_key = ANALYST_REPORT_MAP[analyst_key]
+
+                    has_report = bool(chunk.get(report_key))
+
+                    if has_report:
+                        tracker.mark_agent_completed(agent_name)
+                    elif not found_active:
+                        tracker.set_current_agent(agent_name)
+                        found_active = True
+
+                # 如果所有分析师完成，开始研究团队
+                if not found_active and selected:
+                    all_done = all(
+                        tracker.agent_status.get(ANALYST_AGENT_NAMES[key]) == "completed"
+                        for key in selected if key in ANALYST_AGENT_NAMES
+                    )
+                    if all_done and tracker.agent_status.get("Bull Researcher") == "pending":
+                        tracker.set_current_agent("Bull Researcher")
+
+            def update_research_team_status(tracker, status):
+                """更新研究团队状态。"""
+                for agent in ["Bull Researcher", "Bear Researcher", "Research Manager"]:
+                    tracker.agent_status[agent] = status
+                tracker._push_event_direct("agent_start", {
+                    "agent": "Research Team",
+                    "status": status,
+                    "agent_status": tracker.agent_status,
+                })
 
             for day_idx, trade_date in enumerate(trading_days, 1):
-                if cancelled:
-                    break
-
                 # 发送日期进度
                 yield f"event: day\ndata: {json.dumps({'day_current': day_idx, 'day_total': total_days, 'date': trade_date})}\n\n"
 
                 for symbol_idx, symbol in enumerate(watchlist, 1):
-                    if cancelled:
-                        break
-
                     completed_tasks += 1
                     task_idx = (day_idx - 1) * total_symbols + symbol_idx
 
-                    # 发送任务进度
-                    yield f"event: progress\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol, 'status': 'analyzing'})}\n\n"
+                    # 发送任务开始
+                    yield f"event: task_start\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol})}\n\n"
+
+                    # 重置每个任务的统计，保持全局耗时
+                    tracker.llm_calls = 0
+                    tracker.tool_calls = 0
+                    tracker.tokens_in = 0
+                    tracker.tokens_out = 0
+                    tracker._init_agent_status()
+                    tracker.recent_events.clear()
+                    tracker.current_agent = None
+                    tracker.start_time = global_start_time
+
+                    # 发送初始状态
+                    yield f"event: agent_status\ndata: {json.dumps(tracker.get_full_status())}\n\n"
 
                     try:
-                        signal = generator.generate_for_symbol(symbol, trade_date)
+                        # 创建图（使用debug=True启用流式）
+                        graph = TradingAgentsGraph(
+                            selected_analysts=selected_analysts,
+                            config=config,
+                            debug=True,
+                            callbacks=[tracker],
+                        )
+
+                        # 初始化状态
+                        init_state = graph.propagator.create_initial_state(symbol, trade_date)
+                        args = graph.propagator.get_graph_args(callbacks=[tracker])
+
+                        # 流式执行，分析每个chunk
+                        trace = []
+                        for chunk in graph.graph.stream(init_state, **args):
+                            # 更新分析师状态
+                            update_analyst_statuses_from_chunk(chunk, tracker, selected_analysts)
+
+                            # ===== 提取工具调用并发送事件（类似CLI） =====
+                            if "messages" in chunk and len(chunk["messages"]) > 0:
+                                last_message = chunk["messages"][-1]
+                                if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                                    for tool_call in last_message.tool_calls:
+                                        if isinstance(tool_call, dict):
+                                            tool_name = tool_call.get("name", "unknown")
+                                            tool_args = tool_call.get("args", {})
+                                        else:
+                                            tool_name = getattr(tool_call, "name", "unknown")
+                                            tool_args = getattr(tool_call, "args", {})
+
+                                        # 格式化参数
+                                        args_str = str(tool_args)
+                                        if len(args_str) > 100:
+                                            args_str = args_str[:97] + "..."
+
+                                        # 更新tracker计数
+                                        tracker.tool_calls += 1
+
+                                        # 发送tool_start事件
+                                        tool_event = {
+                                            'tool_name': tool_name,
+                                            'args': args_str,
+                                            'call_count': tracker.tool_calls,
+                                            'timestamp': time.strftime('%H:%M:%S'),
+                                            'agent': tracker.current_agent or 'Unknown',
+                                        }
+                                        yield f"event: tool_start\ndata: {json.dumps(tool_event)}\n\n"
+                            # ===== 工具调用提取结束 =====
+
+                            # 研究团队状态
+                            if chunk.get("investment_debate_state"):
+                                debate = chunk["investment_debate_state"]
+                                if debate.get("bull_history") or debate.get("bear_history"):
+                                    update_research_team_status(tracker, "in_progress")
+                                if debate.get("judge_decision"):
+                                    update_research_team_status(tracker, "completed")
+                                    tracker.set_current_agent("Trader")
+
+                            # 交易团队
+                            if chunk.get("trader_investment_plan"):
+                                tracker.mark_agent_completed("Trader")
+                                tracker.set_current_agent("Aggressive Analyst")
+
+                            # 风险管理
+                            if chunk.get("risk_debate_state"):
+                                risk = chunk["risk_debate_state"]
+                                if risk.get("aggressive_history"):
+                                    tracker.set_current_agent("Aggressive Analyst")
+                                if risk.get("conservative_history"):
+                                    tracker.set_current_agent("Conservative Analyst")
+                                if risk.get("neutral_history"):
+                                    tracker.set_current_agent("Neutral Analyst")
+                                if risk.get("judge_decision"):
+                                    for agent in ["Aggressive Analyst", "Conservative Analyst", "Neutral Analyst"]:
+                                        tracker.mark_agent_completed(agent)
+                                    tracker.set_current_agent("Portfolio Manager")
+
+                            # 最终报告
+                            if chunk.get("final_trade_decision_report"):
+                                tracker.mark_agent_completed("Portfolio Manager")
+                                tracker.mark_agent_completed("Report Finalizer")
+
+                            # 发送状态更新事件
+                            yield f"event: agent_status\ndata: {json.dumps(tracker.get_full_status())}\n\n"
+
+                            # 发送心跳（保持耗时显示）
+                            elapsed = int(time.time() - global_start_time)
+                            yield f"event: heartbeat\ndata: {json.dumps({'symbol': symbol, 'elapsed': elapsed})}\n\n"
+
+                            trace.append(chunk)
+
+                        # 获取最终状态和决策
+                        final_state = trace[-1]
+
+                        # 保存中间状态到eval_results（与CLI一致）
+                        graph.ticker = symbol
+                        graph._log_state(trade_date, final_state)
+
+                        # 保存Markdown报告到reports目录（与CLI一致）
+                        report_dir = Path("reports") / symbol / trade_date
+                        save_report_to_disk(final_state, symbol, report_dir)
+
+                        raw_signal = graph.process_signal(final_state["final_trade_decision"])
+
+                        # 映射到DecisionAction
+                        signal_map = {"BUY": "BUY", "OVERWEIGHT": "BUY", "SELL": "SELL", "UNDERWEIGHT": "SELL", "HOLD": "HOLD"}
+                        action_str = signal_map.get((raw_signal or "").upper(), "HOLD")
+                        action = DecisionAction(action_str)
+
+                        # 创建并保存信号
+                        signal = TradingSignal.create(
+                            symbol=symbol,
+                            signal_date=trade_date,
+                            action=action,
+                            rationale=final_state.get("final_trade_decision_report", ""),
+                            metadata={"analysts_used": selected_analysts},
+                        )
                         recorder.save_signal(signal)
 
-                        # 发送完成事件
-                        yield f"event: completed\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol, 'action': signal.action.value, 'confidence': signal.confidence})}\n\n"
+                        yield f"event: task_complete\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol, 'action': action.value, 'confidence': signal.confidence, 'stats': tracker._get_stats()})}\n\n"
 
                     except Exception as e:
-                        # 发送错误事件
-                        yield f"event: error\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol, 'error': str(e)})}\n\n"
+                        yield f"event: task_error\ndata: {json.dumps({'task_current': task_idx, 'task_total': total_tasks, 'day': day_idx, 'symbol': symbol, 'error': str(e), 'stats': tracker._get_stats()})}\n\n"
 
             # 发送完成事件
             yield f"event: done\ndata: {json.dumps({'start_date': start_date, 'end_date': end_date, 'total_days': total_days, 'total_signals': completed_tasks})}\n\n"
 
         except GeneratorExit:
-            # 客户端断开连接，停止执行
             print("客户端取消，停止生成")
             return
         except Exception as e:

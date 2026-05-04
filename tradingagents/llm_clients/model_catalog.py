@@ -97,6 +97,15 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Qwen qwen3.5-plus", "qwen3.5-plus"),
         ],
     },
+    "deepseek": {
+        "quick": [
+            ("DeepSeek V4 Flash - Fast, cost-effective", "deepseek-v4-flash"),
+        ],
+        "deep": [
+            ("DeepSeek V4 Pro - Strong reasoning", "deepseek-v4-pro"),
+            ("DeepSeek V4 Flash - Fast, cost-effective", "deepseek-v4-flash"),
+        ],
+    },
 }
 
 

@@ -62,6 +62,10 @@
         .form-group label { display: block; margin-bottom: 5px; color: #666; font-size: 13px; }
         .form-group input, .form-group select { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
 
+        /* 分析师勾选框 */
+        .analyst-checkbox input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #27ae60; }
+        .analyst-checkbox:hover { background: #f0f0f0; padding: 5px 8px; border-radius: 4px; }
+
         /* 筛选栏 */
         .filter-bar { display: flex; gap: 15px; align-items: center; padding: 15px; background: #f8f9fa; border-radius: 8px; margin-bottom: 20px; }
         .filter-bar input, .filter-bar select { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; }
@@ -95,6 +99,14 @@
         .generate-single { background: #e8f5e9; }
         .generate-batch { background: #fff8e1; }
         .generate-box h3 { font-size: 14px; margin-bottom: 10px; color: #333; }
+
+        /* 全局进度条（跨页面显示） */
+        .global-progress { background: #fff3cd; border-bottom: 1px solid #ffc107; padding: 10px 20px; display: none; }
+        .global-progress.active { display: block; }
+        .global-progress-bar-bg { background: #e0e0e0; border-radius: 4px; height: 20px; overflow: hidden; max-width: 600px; }
+        .global-progress-bar { height: 100%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: bold; }
+        .global-progress-text { font-size: 13px; color: #856404; margin-left: 15px; }
+        .global-progress-cancel { margin-left: 15px; }
     </style>
 </head>
 <body>
@@ -105,6 +117,17 @@
                 <a href="/signals" class="active">信号中心</a>
                 <a href="/backtest">回测分析</a>
             </nav>
+        </div>
+    </div>
+
+    <!-- 全局进度条（跨页面显示） -->
+    <div class="global-progress" id="globalProgress">
+        <div style="max-width: 1400px; margin: 0 auto; display: flex; align-items: center;">
+            <div class="global-progress-bar-bg">
+                <div class="global-progress-bar" id="globalProgressBar" style="width: 0%; background: #f39c12;"></div>
+            </div>
+            <div class="global-progress-text" id="globalProgressText">准备中...</div>
+            <button class="btn btn-danger btn-sm global-progress-cancel" id="globalCancelBtn" onclick="cancelGlobalGeneration()">取消</button>
         </div>
     </div>
 
@@ -140,6 +163,108 @@
         <!-- 信号生成 -->
         <div class="card">
             <h2>信号生成</h2>
+
+            <!-- 模型配置 -->
+            <div style="background: #f0f4f8; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <h3 style="font-size: 14px; margin-bottom: 10px; color: #333;">LLM 模型配置</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                    <div class="form-group">
+                        <label>LLM Provider</label>
+                        <select id="llmProvider" onchange="updateModelOptions()">
+                            <option value="qwen" selected>Qwen (阿里云)</option>
+                            <option value="deepseek">DeepSeek (深度求索)</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic</option>
+                            <option value="google">Google</option>
+                            <option value="xai">xAI</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>深度思考模型 <span style="color: #666; font-size: 11px;">(关键决策)</span></label>
+                        <div style="display: flex; gap: 5px; align-items: center;">
+                            <select id="deepThinkModel" style="flex: 1;">
+                                <!-- 动态填充 -->
+                            </select>
+                            <label style="display: flex; align-items: center; gap: 3px; font-size: 11px; cursor: pointer;">
+                                <input type="checkbox" id="deepThinkCustom" onchange="toggleCustomModel('deepThink')"> 自定义
+                            </label>
+                        </div>
+                        <input type="text" id="deepThinkCustomInput" style="display: none; margin-top: 5px;" placeholder="输入模型名，如 qwen3.6-flash-2026-04-16">
+                    </div>
+                    <div class="form-group">
+                        <label>快速思考模型 <span style="color: #666; font-size: 11px;">(分析执行)</span></label>
+                        <div style="display: flex; gap: 5px; align-items: center;">
+                            <select id="quickThinkModel" style="flex: 1;">
+                                <!-- 动态填充 -->
+                            </select>
+                            <label style="display: flex; align-items: center; gap: 3px; font-size: 11px; cursor: pointer;">
+                                <input type="checkbox" id="quickThinkCustom" onchange="toggleCustomModel('quickThink')"> 自定义
+                            </label>
+                        </div>
+                        <input type="text" id="quickThinkCustomInput" style="display: none; margin-top: 5px;" placeholder="输入模型名，如 qwen3.5-122b-a10b">
+                    </div>
+                </div>
+                <!-- Qwen免费额度提示 -->
+                <div id="qwenFreeTip" style="margin-top: 10px; padding: 8px; background: #fff3cd; border-radius: 4px; font-size: 11px; color: #856404;">
+                    <strong>Qwen免费额度提示：</strong> 可勾选"自定义"输入免费模型名，如 <code>qwen3.6-flash-2026-04-16</code>、<code>qwen3.5-122b-a10b</code> 等。<br>
+                    <span style="color: #856404; opacity: 0.8;">自定义模型名可能会有警告提示"不在已知列表"，但会正常调用，不影响使用。</span>
+                </div>
+                <!-- 模型使用说明 -->
+                <div style="margin-top: 12px; padding: 10px; background: #fff; border-radius: 4px; font-size: 12px; color: #555;">
+                    <div style="display: flex; gap: 20px;">
+                        <div>
+                            <strong style="color: #2c3e50;">深度思考模型用于：</strong>
+                            <span style="color: #666;">研究经理(综合辩论)、投资组合经理(最终决策)</span>
+                        </div>
+                        <div>
+                            <strong style="color: #2c3e50;">快速思考模型用于：</strong>
+                            <span style="color: #666;">分析师团队、牛熊研究员、交易员、风控分析、报告格式化</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 分析师团队选择 -->
+            <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <h3 style="font-size: 14px; margin-bottom: 10px; color: #333;">分析师团队选择</h3>
+                <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                    <label class="analyst-checkbox" style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="checkbox" id="analystMarket" checked> 市场分析师 <span style="color: #666; font-size: 11px;">(技术指标)</span>
+                    </label>
+                    <label class="analyst-checkbox" style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="checkbox" id="analystSocial"> 社交分析师 <span style="color: #666; font-size: 11px;">(舆情)</span>
+                    </label>
+                    <label class="analyst-checkbox" style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="checkbox" id="analystNews" checked> 新闻分析师 <span style="color: #666; font-size: 11px;">(新闻公告)</span>
+                    </label>
+                    <label class="analyst-checkbox" style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="checkbox" id="analystFundamentals" checked> 基本面分析师 <span style="color: #666; font-size: 11px;">(财务报表)</span>
+                    </label>
+                </div>
+                <div style="margin-top: 10px; font-size: 11px; color: #888;">
+                    至少选择一个分析师。其他团队（研究、交易、风控、组合管理）为固定成员。
+                </div>
+            </div>
+
+            <!-- 公共参数配置 -->
+            <div style="background: #fff8e1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <h3 style="font-size: 14px; margin-bottom: 10px; color: #333;">公共参数配置</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div class="form-group">
+                        <label>watchlist路径</label>
+                        <input type="text" id="watchlistPath" value="watchlist.csv">
+                    </div>
+                    <div class="form-group">
+                        <label>研究深度</label>
+                        <select id="researchDepth">
+                            <option value="1">快速 (1轮辩论)</option>
+                            <option value="2" selected>中等 (2轮辩论)</option>
+                            <option value="3">深度 (3轮辩论)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
             <div class="generate-section">
                 <!-- 单日生成 -->
                 <div class="generate-box generate-single">
@@ -147,10 +272,6 @@
                     <div class="form-group">
                         <label>生成日期</label>
                         <input type="date" id="singleDate">
-                    </div>
-                    <div class="form-group">
-                        <label>watchlist路径</label>
-                        <input type="text" id="watchlistPath" value="watchlist.csv">
                     </div>
                     <button class="btn btn-success" id="singleBtn" onclick="generateSingle()">生成单日信号</button>
                 </div>
@@ -173,13 +294,55 @@
                 </div>
             </div>
 
-            <!-- 进度显示 -->
-            <div class="progress-container" id="progressContainer">
+            <!-- 进度显示（详细版） -->
+            <div class="progress-container" id="progressContainer" style="display: none;">
+                <!-- 统计概览 -->
+                <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 15px; background: #f8f9fa; padding: 10px; border-radius: 8px;">
+                    <div style="text-align: center;">
+                        <div style="color: #666; font-size: 11px;">LLM调用</div>
+                        <div id="statsLLM" style="font-size: 18px; font-weight: bold; color: #3498db;">0</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="color: #666; font-size: 11px;">工具调用</div>
+                        <div id="statsTools" style="font-size: 18px; font-weight: bold; color: #27ae60;">0</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="color: #666; font-size: 11px;">输入Token</div>
+                        <div id="statsTokensIn" style="font-size: 18px; font-weight: bold; color: #9b59b6;">0</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="color: #666; font-size: 11px;">输出Token</div>
+                        <div id="statsTokensOut" style="font-size: 18px; font-weight: bold; color: #9b59b6;">0</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="color: #666; font-size: 11px;">Agent完成</div>
+                        <div id="statsAgents" style="font-size: 18px; font-weight: bold; color: #e67e22;">0/0</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="color: #666; font-size: 11px;">耗时</div>
+                        <div id="statsTime" style="font-size: 18px; font-weight: bold; color: #7f8c8d;">00:00</div>
+                    </div>
+                </div>
+
+                <!-- 进度条 -->
                 <div class="progress-bar-bg">
                     <div class="progress-bar" id="progressBar" style="width: 0%; background: #f39c12;"></div>
                 </div>
                 <div class="progress-text" id="progressText">准备中...</div>
-                <div class="progress-log" id="progressLog"></div>
+
+                <!-- Agent状态表格 -->
+                <div style="margin-top: 15px;">
+                    <div style="font-size: 13px; color: #666; margin-bottom: 8px;">Agent状态</div>
+                    <div id="agentStatusTable" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;">
+                        <!-- 动态填充 -->
+                    </div>
+                </div>
+
+                <!-- 最近事件日志 -->
+                <div style="margin-top: 15px;">
+                    <div style="font-size: 13px; color: #666; margin-bottom: 8px;">最近事件</div>
+                    <div class="progress-log" id="progressLog" style="max-height: 200px;"></div>
+                </div>
             </div>
             <div id="generateStatus" style="margin-top: 10px;"></div>
         </div>
@@ -235,6 +398,150 @@
     </div>
 
     <script>
+        // 模型选项数据
+        const MODEL_OPTIONS = {
+            'qwen': {
+                'quick': [
+                    {label: 'qwen3.6-flash - 快速经济', value: 'qwen3.6-flash'},
+                    {label: 'qwen3.6-plus - 强推理', value: 'qwen3.6-plus'},
+                ],
+                'deep': [
+                    {label: 'qwen3.6-plus - 强推理', value: 'qwen3.6-plus'},
+                    {label: 'qwen3.6-flash - 快速经济', value: 'qwen3.6-flash'},
+                ]
+            },
+            'openai': {
+                'quick': [
+                    {label: 'gpt-4o-mini - 快速经济', value: 'gpt-4o-mini'},
+                    {label: 'gpt-4o - 强推理', value: 'gpt-4o'},
+                ],
+                'deep': [
+                    {label: 'gpt-4o - 强推理', value: 'gpt-4o'},
+                    {label: 'gpt-4o-mini - 快速经济', value: 'gpt-4o-mini'},
+                ]
+            },
+            'anthropic': {
+                'quick': [
+                    {label: 'claude-3-5-haiku - 快速', value: 'claude-3-5-haiku-20241022'},
+                    {label: 'claude-3-5-sonnet - 平衡', value: 'claude-3-5-sonnet-20241022'},
+                ],
+                'deep': [
+                    {label: 'claude-sonnet-4-20250514 - 最新', value: 'claude-sonnet-4-20250514'},
+                    {label: 'claude-3-5-sonnet - 平衡', value: 'claude-3-5-sonnet-20241022'},
+                ]
+            },
+            'google': {
+                'quick': [
+                    {label: 'gemini-2.0-flash - 快速', value: 'gemini-2.0-flash'},
+                ],
+                'deep': [
+                    {label: 'gemini-2.5-pro - 强推理', value: 'gemini-2.5-pro-preview-05-06'},
+                    {label: 'gemini-2.0-flash - 快速', value: 'gemini-2.0-flash'},
+                ]
+            },
+            'xai': {
+                'quick': [
+                    {label: 'grok-2-latest - 快速', value: 'grok-2-latest'},
+                ],
+                'deep': [
+                    {label: 'grok-3-latest - 强推理', value: 'grok-3-latest'},
+                    {label: 'grok-2-latest - 快速', value: 'grok-2-latest'},
+                ]
+            },
+            'deepseek': {
+                'quick': [
+                    {label: 'deepseek-v4-flash - 快速经济', value: 'deepseek-v4-flash'},
+                ],
+                'deep': [
+                    {label: 'deepseek-v4-pro - 强推理', value: 'deepseek-v4-pro'},
+                    {label: 'deepseek-v4-flash - 快速经济', value: 'deepseek-v4-flash'},
+                ]
+            }
+        };
+
+        // 更新模型选项
+        function updateModelOptions() {
+            const provider = document.getElementById('llmProvider').value;
+            const deepSelect = document.getElementById('deepThinkModel');
+            const quickSelect = document.getElementById('quickThinkModel');
+
+            // 清空并填充深度模型选项
+            deepSelect.innerHTML = MODEL_OPTIONS[provider]['deep'].map(m =>
+                `<option value="${m.value}">${m.label}</option>`
+            ).join('');
+
+            // 清空并填充快速模型选项
+            quickSelect.innerHTML = MODEL_OPTIONS[provider]['quick'].map(m =>
+                `<option value="${m.value}">${m.label}</option>`
+            ).join('');
+
+            // 显示/隐藏Qwen免费额度提示
+            const qwenTip = document.getElementById('qwenFreeTip');
+            if (qwenTip) {
+                qwenTip.style.display = provider === 'qwen' ? 'block' : 'none';
+            }
+        }
+
+        // 切换自定义模型输入框
+        function toggleCustomModel(modelType) {
+            const checkbox = document.getElementById(modelType + 'Custom');
+            const select = document.getElementById(modelType + 'Model');
+            const input = document.getElementById(modelType + 'CustomInput');
+
+            if (checkbox.checked) {
+                select.disabled = true;
+                select.style.opacity = '0.5';
+                input.style.display = 'block';
+                input.focus();
+            } else {
+                select.disabled = false;
+                select.style.opacity = '1';
+                input.style.display = 'none';
+            }
+        }
+
+        // 获取当前模型配置
+        function getModelConfig() {
+            // 获取选中的分析师
+            const selectedAnalysts = [];
+            if (document.getElementById('analystMarket').checked) selectedAnalysts.push('market');
+            if (document.getElementById('analystSocial').checked) selectedAnalysts.push('social');
+            if (document.getElementById('analystNews').checked) selectedAnalysts.push('news');
+            if (document.getElementById('analystFundamentals').checked) selectedAnalysts.push('fundamentals');
+
+            // 获取模型名（支持自定义）
+            let deepThinkModel = document.getElementById('deepThinkModel').value;
+            let quickThinkModel = document.getElementById('quickThinkModel').value;
+
+            // 如果启用自定义，使用输入框的值
+            if (document.getElementById('deepThinkCustom').checked) {
+                const customValue = document.getElementById('deepThinkCustomInput').value.trim();
+                if (customValue) deepThinkModel = customValue;
+            }
+            if (document.getElementById('quickThinkCustom').checked) {
+                const customValue = document.getElementById('quickThinkCustomInput').value.trim();
+                if (customValue) quickThinkModel = customValue;
+            }
+
+            return {
+                llm_provider: document.getElementById('llmProvider').value,
+                deep_think_llm: deepThinkModel,
+                quick_think_llm: quickThinkModel,
+                research_depth: parseInt(document.getElementById('researchDepth').value),
+                selected_analysts: selectedAnalysts,
+            };
+        }
+
+        // 验证至少选择一个分析师
+        function validateAnalysts() {
+            const selectedAnalysts = [];
+            if (document.getElementById('analystMarket').checked) selectedAnalysts.push('market');
+            if (document.getElementById('analystSocial').checked) selectedAnalysts.push('social');
+            if (document.getElementById('analystNews').checked) selectedAnalysts.push('news');
+            if (document.getElementById('analystFundamentals').checked) selectedAnalysts.push('fundamentals');
+            return selectedAnalysts.length > 0;
+        }
+
         // 设置默认日期
         const today = new Date();
         const oneMonthAgo = new Date(today);
@@ -245,7 +552,154 @@
         document.getElementById('batchEndDate').value = today.toISOString().split('T')[0];
         document.getElementById('filterDate').value = today.toISOString().split('T')[0];
 
+        // 初始化模型选项
+        updateModelOptions();
+
         let abortController = null;
+
+        // ========== 全局进度条状态管理（跨页面） ==========
+
+        // 保存进度状态到 localStorage
+        function saveProgressState(state) {
+            localStorage.setItem('batchGenProgress', JSON.stringify(state));
+        }
+
+        // 获取进度状态
+        function getProgressState() {
+            const data = localStorage.getItem('batchGenProgress');
+            return data ? JSON.parse(data) : null;
+        }
+
+        // 清除进度状态
+        function clearProgressState() {
+            localStorage.removeItem('batchGenProgress');
+            localStorage.removeItem('batchGenDetailProgress');
+        }
+
+        // 保存详细进度数据（agent状态、stats等）
+        function saveDetailProgress(detail) {
+            const existing = localStorage.getItem('batchGenDetailProgress');
+            const current = existing ? JSON.parse(existing) : {};
+            Object.assign(current, detail);
+            localStorage.setItem('batchGenDetailProgress', JSON.stringify(current));
+        }
+
+        // 获取详细进度数据
+        function getDetailProgress() {
+            const data = localStorage.getItem('batchGenDetailProgress');
+            return data ? JSON.parse(data) : null;
+        }
+
+        // 更新全局进度条显示
+        function updateGlobalProgress(pct, text, isActive) {
+            const progressDiv = document.getElementById('globalProgress');
+            const progressBar = document.getElementById('globalProgressBar');
+            const progressText = document.getElementById('globalProgressText');
+            const cancelBtn = document.getElementById('globalCancelBtn');
+
+            if (isActive) {
+                progressDiv.classList.add('active');
+                progressBar.style.width = pct + '%';
+                progressBar.textContent = Math.round(pct) + '%';
+                progressText.textContent = text;
+                cancelBtn.style.display = pct < 100 ? 'block' : 'none';
+            } else {
+                progressDiv.classList.remove('active');
+            }
+        }
+
+        // 取消全局生成
+        function cancelGlobalGeneration() {
+            if (abortController) {
+                abortController.abort();
+                abortController = null;
+            }
+            clearProgressState();
+            updateGlobalProgress(0, '', false);
+            document.getElementById('batchBtn').disabled = false;
+        }
+
+        // 页面加载时检查是否有进行中的任务
+        function checkProgressOnLoad() {
+            const state = getProgressState();
+            const detail = getDetailProgress();
+            if (state && state.active) {
+                // 显示进度容器
+                document.getElementById('progressContainer').style.display = 'block';
+
+                // 恢复进度条
+                const progressBar = document.getElementById('progressBar');
+                progressBar.style.width = state.pct + '%';
+                progressBar.textContent = Math.round(state.pct) + '%';
+                if (state.pct >= 100) {
+                    progressBar.style.background = '#27ae60';
+                } else {
+                    progressBar.style.background = '#f39c12';
+                }
+
+                // 恢复进度文本
+                document.getElementById('progressText').textContent = state.text || '进行中...';
+
+                // 恢复详细进度显示
+                if (detail) {
+                    if (detail.agent_status) updateAgentStatusTable(detail.agent_status);
+                    if (detail.stats) updateStats(detail.stats);
+                    if (detail.llm_calls) document.getElementById('statsLLM').textContent = detail.llm_calls;
+                    if (detail.tool_calls) document.getElementById('statsTools').textContent = detail.tool_calls;
+                    if (detail.tokens_in) document.getElementById('statsTokensIn').textContent = formatTokens(detail.tokens_in);
+                    if (detail.tokens_out) document.getElementById('statsTokensOut').textContent = formatTokens(detail.tokens_out);
+                    if (detail.elapsed) {
+                        const minutes = Math.floor(detail.elapsed / 60);
+                        const seconds = detail.elapsed % 60;
+                        document.getElementById('statsTime').textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                    }
+                    if (detail.current_symbol) {
+                        document.getElementById('progressText').textContent = `分析 ${detail.current_symbol}... (${Math.round(state.pct)}%)`;
+                    }
+                }
+
+                // 显示全局进度条
+                updateGlobalProgress(state.pct, state.text, true);
+
+                if (state.pct < 100) {
+                    document.getElementById('generateStatus').innerHTML =
+                        '<div style="color: #856404;">有未完成的批量生成任务，请点击"批量生成"重新开始</div>';
+                    // 显示取消按钮
+                    document.getElementById('cancelBtn').style.display = 'block';
+                    document.getElementById('batchBtn').disabled = true;
+                }
+            }
+        }
+
+        // 定期检查 localStorage 状态（用于跨页面同步）
+        function startProgressSync() {
+            setInterval(() => {
+                const state = getProgressState();
+                const detail = getDetailProgress();
+                if (state && state.active) {
+                    // 确保进度容器显示
+                    document.getElementById('progressContainer').style.display = 'block';
+
+                    // 更新进度条
+                    const progressBar = document.getElementById('progressBar');
+                    progressBar.style.width = state.pct + '%';
+                    progressBar.textContent = Math.round(state.pct) + '%';
+
+                    updateGlobalProgress(state.pct, state.text, true);
+                    // 同步详细进度
+                    if (detail) {
+                        if (detail.agent_status) updateAgentStatusTable(detail.agent_status);
+                        if (detail.stats) updateStats(detail.stats);
+                    }
+                } else {
+                    updateGlobalProgress(0, '', false);
+                }
+            }, 1000);
+        }
+
+        // 初始化
+        checkProgressOnLoad();
+        startProgressSync();
 
         // 加载统计数据
         function loadStats() {
@@ -310,41 +764,155 @@
                 });
         }
 
-        // 单日生成
+        // 单日生成（使用SSE流式）
         function generateSingle() {
             const date = document.getElementById('singleDate').value;
             const watchlist = document.getElementById('watchlistPath').value;
             const btn = document.getElementById('singleBtn');
             const statusDiv = document.getElementById('generateStatus');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const progressLog = document.getElementById('progressLog');
 
             if (!date) {
                 statusDiv.innerHTML = '<div class="negative">请选择日期</div>';
                 return;
             }
 
-            btn.disabled = true;
-            statusDiv.innerHTML = '<div style="color: #666;">生成中...</div>';
+            if (!validateAnalysts()) {
+                statusDiv.innerHTML = '<div class="negative">请至少选择一个分析师</div>';
+                return;
+            }
 
-            fetch('/api/signals/generate', {
+            // 显示进度容器
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressBar.style.background = '#f39c12';
+            progressText.textContent = '准备生成...';
+            progressLog.innerHTML = '';
+            statusDiv.innerHTML = '';
+            btn.disabled = true;
+
+            abortController = new AbortController();
+
+            const modelConfig = getModelConfig();
+            fetch('/api/signals/generate-stream', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({date: date, watchlist_path: watchlist})
+                body: JSON.stringify({date: date, watchlist_path: watchlist, model_config: modelConfig}),
+                signal: abortController.signal
             })
-            .then(r => r.json())
-            .then(result => {
-                btn.disabled = false;
-                if (result.success) {
-                    statusDiv.innerHTML = `<div class="positive">成功生成 ${result.count} 条信号</div>`;
-                    loadStats();
-                    loadSignals();
-                } else {
-                    statusDiv.innerHTML = `<div class="negative">${result.error}</div>`;
+            .then(response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                function read() {
+                    reader.read().then(({done, value}) => {
+                        if (done) {
+                            btn.disabled = false;
+                            progressBar.style.background = '#27ae60';
+                            abortController = null;
+                            loadStats();
+                            loadSignals();
+                            return;
+                        }
+
+                        buffer += decoder.decode(value, {stream: true});
+                        const lines = buffer.split('\n\n');
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            const eventMatch = line.match(/^event: (\w+)\ndata: (.+)$/m);
+                            if (eventMatch) {
+                                handleSingleEvent(eventMatch[1], JSON.parse(eventMatch[2]), progressBar, progressText, progressLog, statusDiv, btn);
+                            }
+                        }
+                        read();
+                    });
                 }
+                read();
             })
             .catch(e => {
                 btn.disabled = false;
-                statusDiv.innerHTML = `<div class="negative">${e}</div>`;
+                abortController = null;
+                if (e.name !== 'AbortError') {
+                    progressBar.style.background = '#e74c3c';
+                    statusDiv.innerHTML = `<div class="negative">${e}</div>`;
+                }
             });
+        }
+
+        function handleSingleEvent(type, data, progressBar, progressText, progressLog, statusDiv, btn) {
+            switch (type) {
+                case 'start':
+                    progressText.textContent = `单日生成: ${data.date}`;
+                    progressLog.innerHTML = '';
+                    document.getElementById('agentStatusTable').innerHTML = '';
+                    break;
+
+                case 'agent_status':
+                    updateAgentStatusTable(data.agent_status);
+                    updateStats(data.stats);
+                    break;
+
+                case 'task_start':
+                    progressText.textContent = `分析 ${data.symbol} (${data.current}/${data.total})`;
+                    document.getElementById('statsLLM').textContent = '0';
+                    document.getElementById('statsTools').textContent = '0';
+                    document.getElementById('statsTokensIn').textContent = '0';
+                    document.getElementById('statsTokensOut').textContent = '0';
+                    break;
+
+                case 'llm_start':
+                    document.getElementById('statsLLM').textContent = data.call_count;
+                    progressLog.innerHTML += `<div style="font-size: 10px; color: #3498db;">[${data.timestamp}] LLM调用 #${data.call_count} (${data.agent})</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    break;
+
+                case 'tool_start':
+                    document.getElementById('statsTools').textContent = data.call_count;
+                    const toolArgs = data.args.length > 50 ? data.args.substring(0, 50) + '...' : data.args;
+                    progressLog.innerHTML += `<div style="font-size: 10px; color: #27ae60;">[${data.timestamp}] 工具: ${data.tool_name}(${toolArgs})</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    break;
+
+                case 'llm_end':
+                    document.getElementById('statsTokensIn').textContent = formatTokens(data.total_in);
+                    document.getElementById('statsTokensOut').textContent = formatTokens(data.total_out);
+                    break;
+
+                case 'heartbeat':
+                    document.getElementById('statsTime').textContent = `${Math.floor(data.elapsed / 60).toString().padStart(2, '0')}:${(data.elapsed % 60).toString().padStart(2, '0')}`;
+                    break;
+
+                case 'task_complete':
+                    const pct = (data.current / data.total) * 100;
+                    progressBar.style.width = pct + '%';
+                    progressBar.textContent = Math.round(pct) + '%';
+                    const resultCls = data.action === 'BUY' ? 'positive' : data.action === 'SELL' ? 'negative' : '';
+                    progressLog.innerHTML += `<div style="margin-top: 5px; font-weight: bold; ${resultCls}">${data.symbol} → ${data.action} (${data.confidence ? data.confidence.toFixed(0) + '%' : '-'})</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    if (data.stats) updateStats(data.stats);
+                    break;
+
+                case 'task_error':
+                    progressLog.innerHTML += `<div class="negative" style="font-size: 10px;">${data.symbol} → ERROR: ${data.error}</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    break;
+
+                case 'done':
+                    progressBar.style.width = '100%';
+                    progressBar.style.background = '#27ae60';
+                    progressText.textContent = `完成！共 ${data.count} 条信号`;
+                    statusDiv.innerHTML = `<div class="positive">单日生成完成</div>`;
+                    btn.disabled = false;
+                    loadStats();
+                    loadSignals();
+                    break;
+            }
         }
 
         // 批量生成（使用SSE流式）
@@ -365,7 +933,12 @@
                 return;
             }
 
-            // 显示进度
+            if (!validateAnalysts()) {
+                statusDiv.innerHTML = '<div class="negative">请至少选择一个分析师</div>';
+                return;
+            }
+
+            // 显示进度（页面内）
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
             progressBar.style.background = '#f39c12';
@@ -375,12 +948,17 @@
             btn.disabled = true;
             cancelBtn.style.display = 'block';
 
+            // 初始化全局进度状态
+            saveProgressState({active: true, pct: 0, text: '准备批量生成...', startDate, endDate});
+            updateGlobalProgress(0, '准备批量生成...', true);
+
             abortController = new AbortController();
 
+            const modelConfig = getModelConfig();
             fetch('/api/signals/batch-generate-stream', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({start_date: startDate, end_date: endDate, watchlist_path: watchlist}),
+                body: JSON.stringify({start_date: startDate, end_date: endDate, watchlist_path: watchlist, model_config: modelConfig}),
                 signal: abortController.signal
             })
             .then(response => {
@@ -395,6 +973,8 @@
                             cancelBtn.style.display = 'none';
                             progressBar.style.background = '#27ae60';
                             abortController = null;
+                            clearProgressState();
+                            updateGlobalProgress(100, '已完成', false);
                             loadStats();
                             loadSignals();
                             return;
@@ -428,28 +1008,103 @@
         }
 
         function handleEvent(type, data, progressBar, progressText, progressLog, statusDiv, btn, cancelBtn) {
+            let pct = 0;
+            let globalText = '';
+
             switch (type) {
                 case 'start':
                     progressText.textContent = `批量生成: ${data.start_date} ~ ${data.end_date}`;
-                    progressLog.innerHTML += `<div>共 ${data.total_days} 天, ${data.total_symbols} 只股票</div>`;
+                    progressLog.innerHTML = '';
+                    document.getElementById('agentStatusTable').innerHTML = '';
+                    globalText = `批量生成: ${data.start_date} ~ ${data.end_date}`;
+                    saveProgressState({active: true, pct: 0, text: globalText, startDate: data.start_date, endDate: data.end_date});
+                    updateGlobalProgress(0, globalText, true);
                     break;
-                case 'day':
-                    progressText.textContent = `处理第 ${data.day_current}/${data.day_total} 天: ${data.date}`;
-                    progressLog.innerHTML += `<div style="margin-top: 5px; font-weight: bold;">${data.date}</div>`;
+
+                case 'agent_status':
+                    updateAgentStatusTable(data.agent_status);
+                    updateStats(data.stats);
+                    saveDetailProgress({agent_status: data.agent_status, stats: data.stats});
                     break;
-                case 'progress':
-                    const pct = (data.task_current / data.task_total) * 100;
+
+                case 'task_start':
+                    progressText.textContent = `分析 ${data.symbol} (${data.task_current}/${data.task_total})`;
+                    document.getElementById('agentStatusTable').innerHTML = '';
+                    document.getElementById('statsLLM').textContent = '0';
+                    document.getElementById('statsTools').textContent = '0';
+                    document.getElementById('statsTokensIn').textContent = '0';
+                    document.getElementById('statsTokensOut').textContent = '0';
+                    saveDetailProgress({current_symbol: data.symbol, task_current: data.task_current, task_total: data.task_total});
+                    break;
+
+                case 'llm_start':
+                    document.getElementById('statsLLM').textContent = data.call_count;
+                    progressLog.innerHTML += `<div style="font-size: 10px; color: #3498db;">[${data.timestamp}] LLM调用 #${data.call_count} (${data.agent})</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    saveDetailProgress({llm_calls: data.call_count});
+                    break;
+
+                case 'tool_start':
+                    document.getElementById('statsTools').textContent = data.call_count;
+                    const toolArgs = data.args.length > 50 ? data.args.substring(0, 50) + '...' : data.args;
+                    progressLog.innerHTML += `<div style="font-size: 10px; color: #27ae60;">[${data.timestamp}] 工具: ${data.tool_name}(${toolArgs})</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    saveDetailProgress({tool_calls: data.call_count});
+                    break;
+
+                case 'llm_end':
+                    const tokensIn = data.total_in;
+                    const tokensOut = data.total_out;
+                    document.getElementById('statsTokensIn').textContent = formatTokens(tokensIn);
+                    document.getElementById('statsTokensOut').textContent = formatTokens(tokensOut);
+                    saveDetailProgress({tokens_in: tokensIn, tokens_out: tokensOut});
+                    break;
+
+                case 'agent_start':
+                    updateAgentStatus(data.agent_status, data.agent);
+                    saveDetailProgress({agent_status: data.agent_status});
+                    break;
+
+                case 'agent_complete':
+                    updateAgentStatus(data.agent_status, null);
+                    saveDetailProgress({agent_status: data.agent_status});
+                    break;
+
+                case 'stats':
+                    updateStats(data);
+                    saveDetailProgress({stats: data});
+                    break;
+
+                case 'heartbeat':
+                    // 心跳事件：显示正在等待LLM响应
+                    progressText.textContent = `分析 ${data.symbol}... (等待LLM响应 ${data.elapsed}秒)`;
+                    document.getElementById('statsTime').textContent = `${Math.floor(data.elapsed / 60).toString().padStart(2, '0')}:${(data.elapsed % 60).toString().padStart(2, '0')}`;
+                    saveDetailProgress({elapsed: data.elapsed});
+                    break;
+
+                case 'task_complete':
+                    pct = (data.task_current / data.task_total) * 100;
                     progressBar.style.width = pct + '%';
                     progressBar.textContent = Math.round(pct) + '%';
+                    const resultCls = data.action === 'BUY' ? 'positive' : data.action === 'SELL' ? 'negative' : '';
+                    progressLog.innerHTML += `<div style="margin-top: 5px; font-weight: bold; ${resultCls}">${data.symbol} → ${data.action} (${data.confidence ? data.confidence.toFixed(0) + '%' : '-'})</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    globalText = `进度: ${Math.round(pct)}%`;
+                    saveProgressState({active: true, pct, text: globalText});
+                    updateGlobalProgress(pct, globalText, true);
+                    // 更新最终统计
+                    if (data.stats) updateStats(data.stats);
                     break;
-                case 'completed':
-                    const cls = data.action === 'BUY' ? 'positive' : data.action === 'SELL' ? 'negative' : '';
-                    progressLog.innerHTML += `<div style="font-size: 10px;" class="${cls}">${data.symbol} → ${data.action}</div>`;
+
+                case 'task_error':
+                    progressLog.innerHTML += `<div class="negative" style="font-size: 10px;">${data.symbol} → ERROR: ${data.error}</div>`;
                     progressLog.scrollTop = progressLog.scrollHeight;
                     break;
-                case 'error':
-                    progressLog.innerHTML += `<div class="negative" style="font-size: 10px;">${data.symbol} → ERROR</div>`;
+
+                case 'day':
+                    progressLog.innerHTML += `<div style="margin-top: 10px; font-weight: bold; color: #2c3e50; border-bottom: 1px solid #eee;">=== ${data.date} ===</div>`;
                     break;
+
                 case 'done':
                     progressBar.style.width = '100%';
                     progressBar.style.background = '#27ae60';
@@ -458,8 +1113,56 @@
                     btn.disabled = false;
                     cancelBtn.style.display = 'none';
                     abortController = null;
+                    clearProgressState();
+                    updateGlobalProgress(100, '已完成', false);
+                    loadStats();
+                    loadSignals();
                     break;
             }
+        }
+
+        // 格式化Token数量
+        function formatTokens(n) {
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+            return n.toString();
+        }
+
+        // 更新Agent状态表格
+        function updateAgentStatusTable(agentStatus) {
+            const table = document.getElementById('agentStatusTable');
+            let html = '';
+            for (const [agent, status] of Object.entries(agentStatus || {})) {
+                const statusColor = status === 'completed' ? '#27ae60' :
+                                   status === 'in_progress' ? '#f39c12' :
+                                   status === 'error' ? '#e74c3c' : '#bdc3c7';
+                const statusText = status === 'in_progress' ? '进行中' :
+                                   status === 'completed' ? '完成' :
+                                   status === 'error' ? '错误' : '等待';
+                html += `<div style="padding: 5px 8px; border-radius: 4px; background: ${statusColor}20; border: 1px solid ${statusColor}40;">
+                    <span style="font-size: 11px; color: #333;">${agent}</span>
+                    <span style="font-size: 10px; color: ${statusColor}; margin-left: 5px;">${statusText}</span>
+                </div>`;
+            }
+            table.innerHTML = html;
+        }
+
+        // 更新单个Agent状态
+        function updateAgentStatus(agentStatus, currentAgent) {
+            updateAgentStatusTable(agentStatus);
+        }
+
+        // 更新统计信息
+        function updateStats(stats) {
+            if (!stats) return;
+            document.getElementById('statsLLM').textContent = stats.llm_calls || 0;
+            document.getElementById('statsTools').textContent = stats.tool_calls || 0;
+            document.getElementById('statsTokensIn').textContent = formatTokens(stats.tokens_in || 0);
+            document.getElementById('statsTokensOut').textContent = formatTokens(stats.tokens_out || 0);
+            document.getElementById('statsAgents').textContent = `${stats.agents_completed || 0}/${stats.agents_total || 0}`;
+            const elapsed = stats.elapsed_seconds || 0;
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = elapsed % 60;
+            document.getElementById('statsTime').textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         }
 
         function cancelGeneration() {
@@ -467,6 +1170,8 @@
                 abortController.abort();
                 abortController = null;
             }
+            clearProgressState();
+            updateGlobalProgress(0, '', false);
             document.getElementById('batchBtn').disabled = false;
             document.getElementById('cancelBtn').style.display = 'none';
             document.getElementById('progressBar').style.background = '#e74c3c';

@@ -55,6 +55,7 @@ _PROVIDER_CONFIG = {
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "ollama": ("http://localhost:11434/v1", None),
     "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "QWEN_API_KEY"),
+    "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY"),
 }
 
 

@@ -16,7 +16,7 @@ def create_llm_client(
     """为指定提供方创建 LLM 客户端。
 
     参数：
-        provider: LLM 提供方，如 openai、azure、anthropic、google、xai、ollama、openrouter。
+        provider: LLM 提供方，如 openai、azure、anthropic、google、xai、ollama、openrouter、qwen、deepseek。
         model: 模型名称或标识。
         base_url: 可选的 API 基础地址。
         **kwargs: 提供方专属的附加参数。
@@ -41,8 +41,8 @@ def create_llm_client(
     if provider_lower == "azure":
         return AzureClient(model, base_url, **kwargs)
 
-    if provider_lower == "xai":
-        return OpenAIClient(model, base_url, provider="xai", **kwargs)
+    if provider_lower in ("xai", "deepseek"):
+        return OpenAIClient(model, base_url, provider=provider_lower, **kwargs)
 
     if provider_lower == "anthropic":
         return AnthropicClient(model, base_url, **kwargs)
