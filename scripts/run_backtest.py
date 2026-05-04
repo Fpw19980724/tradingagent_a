@@ -120,6 +120,7 @@ def run_backtest(
     cost_config: TransactionCostConfig,
     max_position_pct: float,
     max_positions: int,
+    buy_amount_pct: float = 0.1,
 ) -> PortfolioBacktestReport:
     """执行组合级回测。"""
     engine = PortfolioBacktestEngine(
@@ -127,6 +128,7 @@ def run_backtest(
         cost_config=cost_config,
         max_position_pct=max_position_pct,
         max_positions=max_positions,
+        buy_amount_pct=buy_amount_pct,
     )
 
     report = engine.backtest_decisions(decisions, daily_data_map)
@@ -281,6 +283,12 @@ def main():
         help="最大持仓数量",
     )
     parser.add_argument(
+        "--buy-amount-pct",
+        type=float,
+        default=0.1,
+        help="单次买入金额占总资产比例",
+    )
+    parser.add_argument(
         "--commission-rate",
         type=float,
         default=0.0003,
@@ -361,6 +369,7 @@ def main():
         cost_config=cost_config,
         max_position_pct=args.max_position_pct,
         max_positions=args.max_positions,
+        buy_amount_pct=args.buy_amount_pct,
     )
 
     # 5. 打印报告

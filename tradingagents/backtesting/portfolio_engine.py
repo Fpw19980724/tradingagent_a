@@ -74,12 +74,14 @@ class PortfolioBacktestEngine:
         cost_config: TransactionCostConfig | None = None,
         max_position_pct: float = 0.2,
         max_positions: int = 5,
+        buy_amount_pct: float = 0.1,  # 单次买入金额占总资产比例
     ):
         self.initial_capital = initial_capital
         self.cost_config = cost_config or TransactionCostConfig()
         self.cost_calculator = TransactionCostCalculator(self.cost_config)
         self.max_position_pct = max_position_pct
         self.max_positions = max_positions
+        self.buy_amount_pct = buy_amount_pct
 
         self.cash = initial_capital
         self.positions: dict[str, dict] = {}
@@ -217,18 +219,94 @@ class PortfolioBacktestEngine:
             notes=f"卖出{sell_qty}股, 持仓{holding_days}天"
         )
 
-    def process_decision(self, decision: AgentDecision, price: float) -> TradeResult:
-        """处理决策。"""
-        quantity = int(decision.quantity) if decision.quantity else 100
+    def find_next_trade_day(
+        self,
+        signal_date: str,
+        df: pd.DataFrame,
+    ) -> tuple[str, float]:
+        """找到信号日后第一个交易日的开盘价。
+
+        信号是当天收盘后分析的，无法用当天价格交易。
+        实际执行用下一个交易日开盘价。
+
+        返回: (trade_date, open_price)
+        """
+        signal_dt = pd.to_datetime(signal_date)
+
+        # 找信号日后第一个交易日
+        for date, row in df.iterrows():
+            if date > signal_dt:
+                trade_date = date.strftime("%Y-%m-%d")
+                open_price = float(row["Open"] if "Open" in df.columns else row["开盘"])
+                return trade_date, open_price
+
+        return None, 0.0
+
+    def process_decision(
+        self,
+        decision: AgentDecision,
+        df: pd.DataFrame,
+        current_prices: dict[str, float] = None,
+    ) -> TradeResult:
+        """处理决策 - 用下一个交易日开盘价执行。
+
+        对于BUY：买入金额 = 总资产 × buy_amount_pct
+        数量自动计算（100股起买，按100股整数倍）
+        """
+        # 找实际执行日和价格
+        trade_date, price = self.find_next_trade_day(decision.trade_date, df)
+
+        if trade_date is None:
+            return TradeResult(
+                symbol=decision.symbol,
+                trade_date=decision.trade_date,
+                action=decision.action.value,
+                executed=False,
+                notes="找不到执行日",
+            )
 
         if decision.action == DecisionAction.BUY:
-            return self.execute_buy(decision.symbol, quantity, price, decision.trade_date)
+            # 计算总资产
+            prices = current_prices or {}
+            equity = self.get_equity(prices)
+
+            # 计算买入金额
+            buy_amount = equity * self.buy_amount_pct
+
+            # 检查单只仓位上限
+            max_position_value = equity * self.max_position_pct
+            if buy_amount > max_position_value:
+                buy_amount = max_position_value
+
+            # 检查现金是否充足
+            if buy_amount > self.cash:
+                buy_amount = self.cash * 0.95  # 保留5%现金缓冲
+
+            if buy_amount < 1000:
+                return TradeResult(
+                    symbol=decision.symbol,
+                    trade_date=trade_date,
+                    action="BUY",
+                    executed=False,
+                    notes="买入金额不足¥1000",
+                )
+
+            # 计算买入数量（100股起买，按100股整数倍）
+            quantity = int(buy_amount / price / 100) * 100
+            if quantity < 100:
+                quantity = 100
+
+            return self.execute_buy(decision.symbol, quantity, price, trade_date)
+
         elif decision.action == DecisionAction.SELL:
-            return self.execute_sell(decision.symbol, None, price, decision.trade_date)
+            return self.execute_sell(decision.symbol, None, price, trade_date)
         else:
             return TradeResult(
-                symbol=decision.symbol, trade_date=decision.trade_date,
-                action="HOLD", executed=False, notes="HOLD不执行"
+                symbol=decision.symbol,
+                trade_date=decision.trade_date,
+                action="HOLD",
+                executed=False,
+                notes="HOLD不执行",
             )
 
     def backtest_decisions(
@@ -239,7 +317,7 @@ class PortfolioBacktestEngine:
         """执行回测。"""
         self.reset()
 
-        # 按日期分组
+        # 按信号日期分组
         decisions_by_date: dict[str, list[AgentDecision]] = {}
         for d in decisions:
             if d.trade_date not in decisions_by_date:
@@ -248,39 +326,66 @@ class PortfolioBacktestEngine:
 
         sorted_dates = sorted(decisions_by_date.keys())
 
-        for trade_date in sorted_dates:
-            day_decisions = decisions_by_date[trade_date]
+        # 记录所有涉及的交易日（信号日+执行日）
+        all_trade_dates = set()
 
-            # 获取当日价格
-            prices: dict[str, float] = {}
-            for d in day_decisions:
-                df = daily_data_map.get(d.symbol)
+        for signal_date in sorted_dates:
+            day_decisions = decisions_by_date[signal_date]
+
+            # 获取当前持仓的收盘价（用于计算总资产）
+            current_prices = {}
+            for symbol in self.positions:
+                df = daily_data_map.get(symbol)
                 if df is not None and not df.empty:
                     try:
-                        if trade_date in df.index:
-                            row = df.loc[trade_date]
+                        signal_dt = pd.to_datetime(signal_date)
+                        if signal_dt in df.index:
                             close_col = "Close" if "Close" in df.columns else "收盘"
-                            prices[d.symbol] = float(row[close_col])
+                            current_prices[symbol] = float(df.loc[signal_dt, close_col])
+                        else:
+                            recent = df[df.index <= signal_dt]
+                            if len(recent) > 0:
+                                current_prices[symbol] = float(recent.iloc[-1][close_col])
+                            else:
+                                current_prices[symbol] = self.positions[symbol]["entry_price"]
                     except Exception:
-                        pass
+                        current_prices[symbol] = self.positions[symbol]["entry_price"]
 
-            # 执行决策
+            # 执行决策（用下一个交易日开盘价）
             for decision in day_decisions:
-                price = prices.get(decision.symbol, 0)
-                if price > 0:
-                    result = self.process_decision(decision, price)
-                    self.trades.append(result)
+                df = daily_data_map.get(decision.symbol)
+                if df is None or df.empty:
+                    continue
 
-            # 记录权益
+                result = self.process_decision(decision, df, current_prices)
+                self.trades.append(result)
+
+                if result.executed:
+                    all_trade_dates.add(result.trade_date)
+
+            all_trade_dates.add(signal_date)
+
+        # 按所有交易日计算权益曲线
+        sorted_trade_dates = sorted(all_trade_dates)
+        for trade_date in sorted_trade_dates:
+            # 获取当日收盘价计算持仓价值
             all_prices = {}
             for symbol in self.positions:
                 df = daily_data_map.get(symbol)
                 if df is not None and not df.empty:
                     try:
-                        if trade_date in df.index:
-                            row = df.loc[trade_date]
+                        date_dt = pd.to_datetime(trade_date)
+                        if date_dt in df.index:
+                            row = df.loc[date_dt]
                             close_col = "Close" if "Close" in df.columns else "收盘"
                             all_prices[symbol] = float(row[close_col])
+                        else:
+                            # 非交易日，用最近收盘价
+                            recent = df[df.index <= date_dt]
+                            if len(recent) > 0:
+                                all_prices[symbol] = float(recent.iloc[-1][close_col])
+                            else:
+                                all_prices[symbol] = self.positions[symbol]["entry_price"]
                     except Exception:
                         all_prices[symbol] = self.positions[symbol]["entry_price"]
 
