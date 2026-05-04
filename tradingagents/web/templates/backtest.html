@@ -78,6 +78,10 @@
                     <input type="number" id="max_position_pct" value="20">
                 </div>
                 <div class="form-group">
+                    <label>单次买入比例 (%)</label>
+                    <input type="number" id="buy_amount_pct" value="10">
+                </div>
+                <div class="form-group">
                     <label>佣金率 (%)</label>
                     <input type="number" id="commission_rate" value="0.03" step="0.01">
                 </div>
@@ -87,6 +91,28 @@
                 </div>
                 <button class="btn" id="runBtn" onclick="runBacktest()" style="width: 100%;">执行回测</button>
                 <div id="statusMsg" style="margin-top: 10px;"></div>
+
+                <h2 style="margin-top: 20px;">信号生成</h2>
+                <div class="form-group">
+                    <label>生成日期</label>
+                    <input type="date" id="generate_date">
+                </div>
+                <div class="form-group">
+                    <label>watchlist路径</label>
+                    <input type="text" id="watchlist_path" value="watchlist.csv">
+                </div>
+                <button class="btn" id="generateBtn" onclick="generateSignals()" style="width: 100%; background: #27ae60;">生成信号</button>
+
+                <!-- 进度条 -->
+                <div id="progressContainer" style="margin-top: 15px; display: none;">
+                    <div style="background: #e0e0e0; border-radius: 4px; height: 20px; overflow: hidden;">
+                        <div id="progressBar" style="background: #27ae60; height: 100%; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <div id="progressText" style="margin-top: 5px; font-size: 12px; color: #666;">准备中...</div>
+                    <div id="progressLog" style="margin-top: 10px; max-height: 150px; overflow-y: auto; font-size: 11px; color: #666;"></div>
+                </div>
+
+                <div id="generateStatus" style="margin-top: 10px;"></div>
 
                 <h2 style="margin-top: 20px;">历史报告</h2>
                 <table>
@@ -184,6 +210,7 @@
         oneMonthAgo.setMonth(today.getMonth() - 1);
         document.getElementById('start_date').value = oneMonthAgo.toISOString().split('T')[0];
         document.getElementById('end_date').value = today.toISOString().split('T')[0];
+        document.getElementById('generate_date').value = today.toISOString().split('T')[0];
 
         let equityChart = null;
 
@@ -200,6 +227,7 @@
                 capital: parseFloat(document.getElementById('capital').value),
                 max_positions: parseInt(document.getElementById('max_positions').value),
                 max_position_pct: parseFloat(document.getElementById('max_position_pct').value) / 100,
+                buy_amount_pct: parseFloat(document.getElementById('buy_amount_pct').value) / 100,
                 commission_rate: parseFloat(document.getElementById('commission_rate').value) / 100,
                 stamp_duty_rate: parseFloat(document.getElementById('stamp_duty_rate').value) / 100,
             };
@@ -333,6 +361,109 @@
         }
 
         loadReportsList();
+
+        function generateSignals() {
+            const date = document.getElementById('generate_date').value || new Date().toISOString().split('T')[0];
+            const watchlist = document.getElementById('watchlist_path').value;
+            const btn = document.getElementById('generateBtn');
+            const statusDiv = document.getElementById('generateStatus');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const progressLog = document.getElementById('progressLog');
+
+            // 显示进度条
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = '准备中...';
+            progressLog.innerHTML = '';
+            statusDiv.innerHTML = '';
+            btn.disabled = true;
+
+            // 使用 fetch + ReadableStream 处理 SSE
+            fetch('/api/signals/generate-stream', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({date: date, watchlist_path: watchlist})
+            })
+            .then(response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                function read() {
+                    reader.read().then(({done, value}) => {
+                        if (done) {
+                            btn.disabled = false;
+                            return;
+                        }
+
+                        buffer += decoder.decode(value, {stream: true});
+                        const lines = buffer.split('\n\n');
+                        buffer = lines.pop();  // 保留不完整的部分
+
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+
+                            // 解析 SSE 格式: "event: xxx\ndata: xxx"
+                            const eventMatch = line.match(/^event: (\w+)\ndata: (.+)$/m);
+                            if (eventMatch) {
+                                const eventType = eventMatch[1];
+                                const data = JSON.parse(eventMatch[2]);
+
+                                handleEvent(eventType, data, progressBar, progressText, progressLog, statusDiv, btn);
+                            }
+                        }
+
+                        read();
+                    });
+                }
+
+                read();
+            })
+            .catch(e => {
+                btn.disabled = false;
+                statusDiv.innerHTML = `<div class="error-msg">${e}</div>`;
+                progressContainer.style.display = 'none';
+            });
+        }
+
+        function handleEvent(eventType, data, progressBar, progressText, progressLog, statusDiv, btn) {
+            switch (eventType) {
+                case 'start':
+                    progressText.textContent = `加载 watchlist...`;
+                    break;
+
+                case 'total':
+                    progressText.textContent = `共 ${data.total} 只股票`;
+                    break;
+
+                case 'progress':
+                    const pct = (data.current / data.total) * 100;
+                    progressBar.style.width = pct + '%';
+                    progressText.textContent = `[${data.current}/${data.total}] 正在分析 ${data.symbol}...`;
+                    progressLog.innerHTML += `<div style="color: #999;">[${data.current}/${data.total}] ${data.symbol} - 分析中...</div>`;
+                    break;
+
+                case 'completed':
+                    progressLog.innerHTML += `<div class="positive">[${data.current}/${data.total}] ${data.symbol} -> ${data.action} (${(data.confidence || 0).toFixed(1)}%)</div>`;
+                    // 滚动到底部
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    break;
+
+                case 'error':
+                    progressLog.innerHTML += `<div class="negative">[${data.current}/${data.total}] ${data.symbol} -> ERROR: ${data.error}</div>`;
+                    progressLog.scrollTop = progressLog.scrollHeight;
+                    break;
+
+                case 'done':
+                    progressBar.style.width = '100%';
+                    progressText.textContent = `完成！共生成 ${data.count} 条信号`;
+                    statusDiv.innerHTML = `<div class="success-msg">成功生成 ${data.count} 条信号 (${data.date})</div>`;
+                    btn.disabled = false;
+                    break;
+            }
+        }
     </script>
 </body>
 </html>

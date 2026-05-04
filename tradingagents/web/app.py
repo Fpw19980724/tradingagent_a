@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
 
 from tradingagents.signals import SignalRecorder, SignalGenerator, load_watchlist
 from tradingagents.portfolio import ManualPortfolioTracker
@@ -169,7 +169,7 @@ def api_signal_detail(signal_id):
 
 @app.route("/api/signals/generate", methods=["POST"])
 def api_generate_signals():
-    """生成信号API。"""
+    """生成信号API（普通版本，返回最终结果）。"""
     data = request.get_json()
 
     watchlist_path = data.get("watchlist_path", "watchlist.csv")
@@ -192,6 +192,55 @@ def api_generate_signals():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/signals/generate-stream", methods=["POST"])
+def api_generate_signals_stream():
+    """生成信号API（SSE流式版本，实时返回进度）。"""
+    data = request.get_json()
+
+    watchlist_path = data.get("watchlist_path", "watchlist.csv")
+    trade_date = data.get("date")
+
+    if not trade_date:
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+
+    def generate():
+        try:
+            # 发送开始事件
+            yield f"event: start\ndata: {json.dumps({'date': trade_date, 'total': 0})}\n\n"
+
+            watchlist = load_watchlist(watchlist_path)
+            total = len(watchlist)
+
+            # 发送总数事件
+            yield f"event: total\ndata: {json.dumps({'total': total})}\n\n"
+
+            generator = SignalGenerator()
+            recorder = SignalRecorder()
+
+            for idx, symbol in enumerate(watchlist, 1):
+                # 发送进度事件
+                yield f"event: progress\ndata: {json.dumps({'current': idx, 'total': total, 'symbol': symbol, 'status': 'analyzing'})}\n\n"
+
+                try:
+                    signal = generator.generate_for_symbol(symbol, trade_date)
+                    recorder.save_signal(signal)
+
+                    # 发送完成事件
+                    yield f"event: completed\ndata: {json.dumps({'current': idx, 'total': total, 'symbol': symbol, 'action': signal.action.value, 'confidence': signal.confidence})}\n\n"
+
+                except Exception as e:
+                    # 发送错误事件
+                    yield f"event: error\ndata: {json.dumps({'current': idx, 'total': total, 'symbol': symbol, 'error': str(e)})}\n\n"
+
+            # 发送完成事件
+            yield f"event: done\ndata: {json.dumps({'date': trade_date, 'count': total})}\n\n"
+
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream")
 
 
 @app.route("/api/portfolio")
@@ -315,6 +364,7 @@ def api_backtest_run():
     initial_capital = float(data.get("capital", 100000))
     max_position_pct = float(data.get("max_position_pct", 0.2))
     max_positions = int(data.get("max_positions", 5))
+    buy_amount_pct = float(data.get("buy_amount_pct", 0.1))
     commission_rate = float(data.get("commission_rate", 0.0003))
     stamp_duty_rate = float(data.get("stamp_duty_rate", 0.0005))
 
@@ -375,6 +425,7 @@ def api_backtest_run():
             cost_config=cost_config,
             max_position_pct=max_position_pct,
             max_positions=max_positions,
+            buy_amount_pct=buy_amount_pct,
         )
 
         report = engine.backtest_decisions(decisions, daily_data_map)

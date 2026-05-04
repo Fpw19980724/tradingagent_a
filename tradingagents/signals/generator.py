@@ -139,6 +139,7 @@ class SignalGenerator:
         watchlist: List[str],
         trade_date: str,
         show_progress: bool = True,
+        progress_callback: Optional[callable] = None,
     ) -> List[TradingSignal]:
         """
         为关注列表中的所有股票生成信号。
@@ -147,6 +148,7 @@ class SignalGenerator:
             watchlist: 股票代码列表。
             trade_date: 交易日期。
             show_progress: 是否显示进度。
+            progress_callback: 进度回调函数，接收 (current, total, symbol, status, signal)。
 
         返回：
             list[TradingSignal]: 生成的信号列表。
@@ -155,12 +157,21 @@ class SignalGenerator:
         total = len(watchlist)
 
         for idx, symbol in enumerate(watchlist, 1):
+            status = "analyzing"
+
+            if progress_callback:
+                progress_callback(idx, total, symbol, status, None)
+
             if show_progress:
                 print(f"  [{idx}/{total}] 正在分析 {symbol}...")
 
             try:
                 signal = self.generate_for_symbol(symbol, trade_date)
                 signals.append(signal)
+
+                status = "completed"
+                if progress_callback:
+                    progress_callback(idx, total, symbol, status, signal)
 
                 if show_progress:
                     print(f"  [{idx}/{total}] {symbol} -> {signal.action.value}")
@@ -174,6 +185,10 @@ class SignalGenerator:
                     metadata={"error": str(e)},
                 )
                 signals.append(error_signal)
+
+                status = "error"
+                if progress_callback:
+                    progress_callback(idx, total, symbol, status, error_signal)
 
                 if show_progress:
                     print(f"  [{idx}/{total}] {symbol} -> ERROR: {str(e)}")
